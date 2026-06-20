@@ -261,13 +261,6 @@ function inferRootBlockChoice(
   projectPrefix: string,
   fallbackBlock: string,
 ) {
-  if (!GENERIC_BLOCK_NAMES.has(fallbackBlock)) {
-    return {
-      blockPart: fallbackBlock,
-      className: `${projectPrefix}-${fallbackBlock}`,
-    };
-  }
-
   for (const className of getClassNames(element)) {
     const rawBase = getRawClassBase(className);
     const normalizedBase = stripKnownPrefix(rawBase, projectPrefix);
@@ -275,12 +268,20 @@ function inferRootBlockChoice(
 
     if (isUsefulClassName(candidate)) {
       const removedBlockSuffix = normalizedBase !== candidate;
+      const shouldPreserveRawBase = !removedBlockSuffix && rawBase.includes("-");
 
       return {
         blockPart: candidate,
-        className: removedBlockSuffix ? `${projectPrefix}-${candidate}` : rawBase,
+        className: shouldPreserveRawBase ? rawBase : `${projectPrefix}-${candidate}`,
       };
     }
+  }
+
+  if (!GENERIC_BLOCK_NAMES.has(fallbackBlock)) {
+    return {
+      blockPart: fallbackBlock,
+      className: `${projectPrefix}-${fallbackBlock}`,
+    };
   }
 
   return {
@@ -289,13 +290,29 @@ function inferRootBlockChoice(
   };
 }
 
-function getBemElementHint(className: string, projectPrefix: string) {
-  const elementPart = className.trim().toLowerCase().split("__")[1]?.split("--")[0];
+function getBemElementHint(
+  className: string,
+  projectPrefix: string,
+  rootClassBases: string[],
+) {
+  const [rawBasePart = "", rawElementPart = ""] = className.trim().toLowerCase().split("__");
+  const basePart = sanitizeBemPart(rawBasePart.split("--")[0] ?? rawBasePart, "");
+  const elementPart = sanitizeBemPart(rawElementPart.split("--")[0] ?? rawElementPart, "");
   if (!elementPart) {
     return null;
   }
 
-  return normalizeElementCandidate(elementPart, projectPrefix);
+  const baseWithoutRoot = stripRootPrefix(
+    stripKnownPrefix(basePart, projectPrefix),
+    rootClassBases,
+  );
+  const elementHint = normalizeElementCandidate(elementPart, projectPrefix);
+
+  if (baseWithoutRoot && isUsefulClassName(baseWithoutRoot)) {
+    return normalizeElementCandidate(`${baseWithoutRoot}-${elementHint}`, projectPrefix);
+  }
+
+  return elementHint;
 }
 
 function stripRootPrefix(value: string, rootClassBases: string[]) {
@@ -365,7 +382,7 @@ function inferElementSemantics(
   const classNames = getClassNames(element);
 
   for (const className of classNames) {
-    const hint = getBemElementHint(className, projectPrefix);
+    const hint = getBemElementHint(className, projectPrefix, rootClassBases);
     if (hint && isUsefulClassName(hint)) {
       return { role: hint, modifier: getModifierHint(classNames, hint, projectPrefix) };
     }

@@ -1,0 +1,284 @@
+#jigma-bricks-panel,
+.jigma-bricks-panel {
+  background: #070b16;
+  border: 1px solid rgba(139, 92, 246, 0.38);
+  border-radius: 12px;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+  box-sizing: border-box;
+  color: #f8fafc;
+  display: grid;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  position: fixed;
+  right: 18px;
+  top: 58px;
+  width: min(430px, calc(100vw - 36px));
+  z-index: 999999;
+}
+
+.jigma-bricks-panel *,
+.jigma-bricks-panel *::before,
+.jigma-bricks-panel *::after {
+  box-sizing: border-box;
+}
+
+.jigma-bricks-panel button,
+.jigma-bricks-panel textarea {
+  font: inherit;
+}
+
+.jigma-bricks-header {
+  align-items: center;
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(7, 11, 22, 0.98));
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px;
+}
+
+.jigma-bricks-header strong {
+  color: #ffffff;
+  display: block;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.jigma-bricks-header span {
+  color: #94a3b8;
+  display: block;
+  font-size: 12px;
+  line-height: 1.3;
+  margin-top: 3px;
+}
+
+.jigma-bricks-header-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.jigma-bricks-badge {
+  background: rgba(45, 212, 191, 0.12);
+  border: 1px solid rgba(45, 212, 191, 0.34);
+  border-radius: 999px;
+  color: #bffbf3 !important;
+  font-size: 11px !important;
+  font-weight: 850;
+  margin: 0 !important;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.jigma-bricks-badge--warn {
+  background: rgba(250, 204, 21, 0.12);
+  border-color: rgba(250, 204, 21, 0.36);
+  color: #fde68a !important;
+}
+
+.jigma-bricks-icon-button,
+.jigma-bricks-button {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  color: #e2e8f0;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 850;
+  justify-content: center;
+  min-height: 34px;
+  padding: 8px 11px;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.jigma-bricks-icon-button:disabled,
+.jigma-bricks-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.jigma-bricks-icon-button:hover,
+.jigma-bricks-button:hover {
+  background: rgba(30, 41, 59, 0.88);
+  border-color: rgba(148, 163, 184, 0.34);
+  color: #ffffff;
+}
+
+.jigma-bricks-icon-button {
+  min-width: 34px;
+  padding: 0;
+}
+
+.jigma-bricks-button--primary {
+  background: linear-gradient(135deg, #a855f7, #3b82f6);
+  border-color: rgba(167, 139, 250, 0.58);
+  color: #ffffff;
+}
+
+.jigma-bricks-body {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.jigma-bricks-toolbar {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 0.9fr 1.2fr 1.2fr;
+}
+
+.jigma-bricks-field {
+  color: #94a3b8;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.jigma-bricks-field > span,
+.jigma-bricks-section-title {
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.jigma-bricks-editor {
+  background: #050814;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  color: #dbeafe;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  min-height: 112px;
+  outline: none;
+  padding: 10px;
+  resize: vertical;
+  width: 100%;
+}
+
+.jigma-bricks-field:first-of-type .jigma-bricks-editor {
+  min-height: 170px;
+}
+
+.jigma-bricks-editor:focus {
+  border-color: rgba(45, 212, 191, 0.58);
+  box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.14);
+}
+
+.jigma-bricks-option {
+  align-items: flex-start;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  color: #cbd5e1;
+  display: grid;
+  gap: 4px 9px;
+  grid-template-columns: auto 1fr;
+  padding: 9px;
+}
+
+.jigma-bricks-option input {
+  accent-color: #8b5cf6;
+  margin: 2px 0 0;
+}
+
+.jigma-bricks-option span {
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.jigma-bricks-option small {
+  color: #94a3b8;
+  font-size: 11px;
+  grid-column: 2;
+  line-height: 1.4;
+}
+
+.jigma-bricks-preview {
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  height: 220px;
+  width: 100%;
+}
+
+.jigma-bricks-list {
+  display: grid;
+  gap: 6px;
+}
+
+.jigma-bricks-list-item {
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.jigma-bricks-list-item strong {
+  color: #bffbf3;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.jigma-bricks-list-item span,
+.jigma-bricks-empty,
+.jigma-bricks-status {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.jigma-bricks-status {
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  padding-top: 10px;
+}
+
+.jigma-bricks-panel--collapsed {
+  grid-template-rows: auto;
+  max-height: none;
+  width: min(320px, calc(100vw - 36px));
+}
+
+.jigma-bricks-panel--collapsed .jigma-bricks-body {
+  display: none;
+}
+
+@media (max-width: 782px) {
+  .jigma-bricks-panel {
+    left: 10px;
+    right: 10px;
+    top: 52px;
+    width: auto;
+  }
+
+  .jigma-bricks-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jigma-bricks-panel *,
+  .jigma-bricks-panel *::before,
+  .jigma-bricks-panel *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

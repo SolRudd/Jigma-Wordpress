@@ -1,5 +1,6 @@
 import type {
   BricksElement,
+  BricksClassAuditEntry,
   BricksExport,
   BricksGlobalClass,
   ClassMode,
@@ -15,6 +16,7 @@ import {
   getRenderableRoots,
   serializeElement,
 } from "../parser/html.ts";
+import { countSvgInternalNodes, sanitizeSvgMarkup } from "../svg/sanitize.ts";
 import {
   createBemClassFactory,
   type BemClassAssignment,
@@ -25,7 +27,10 @@ import {
 } from "./labels.ts";
 import { inspectDependencies } from "../dependencies/inspect.ts";
 import {
+  attachCssToGlobalClasses,
   attachCssToElements,
+  BRICKS_ELEMENT_CUSTOM_CSS_FIELD,
+  type ClassCssTarget,
   type ElementCssTarget,
 } from "../css/element.ts";
 import { scopeCssToBem, type CssSelectorScopeMap } from "../css/scope.ts";
@@ -80,6 +85,7 @@ interface PendingElement {
   element: BricksElement;
   parsedElement: ParsedElement;
   assignment: BemClassAssignment;
+  classList: string[];
   originalClasses: string[];
   path: string;
 }
@@ -92,11 +98,29 @@ function makeStableId(seed: string) {
     hash = Math.imul(hash, 16777619);
   }
 
-  return `jg${(hash >>> 0).toString(36).padStart(8, "0").slice(0, 8)}`;
+  const id = (hash >>> 0).toString(36).padStart(6, "0").slice(0, 6);
+  return /^[a-z]/.test(id) ? id : `j${id.slice(1)}`;
 }
 
 function makeGlobalClassId(className: string) {
-  return `jg_cls_${className.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").toLowerCase()}_${makeStableId(className).slice(2, 6)}`;
+  return makeStableId(`class:${className}`);
+}
+
+function makeUniqueGlobalClassId(className: string, usedIds: Set<string>) {
+  let attempt = 0;
+  let id = makeGlobalClassId(className);
+
+  while (usedIds.has(id)) {
+    attempt += 1;
+    id = makeStableId(`class:${className}:${attempt}`);
+  }
+
+  usedIds.add(id);
+  return id;
+}
+
+function isNativeBemClassMode(exportMode: OutputOptions["exportMode"]) {
+  return exportMode === "native-bem-classes" || exportMode === "global-classes";
 }
 
 function pushWarning(
@@ -107,6 +131,25 @@ function pushWarning(
   if (!warnings.some((warning) => warning.message === message)) {
     warnings.push({ severity, message });
   }
+}
+
+function pushGroupedWarning(
+  warnings: ConversionWarning[],
+  warning: ConversionWarning,
+) {
+  const id = warning.id ?? warning.message;
+  const existing = warnings.find((item) => (item.id ?? item.message) === id);
+  if (existing) {
+    existing.count = (existing.count ?? 1) + (warning.count ?? 1);
+    existing.details = Array.from(new Set([...(existing.details ?? []), ...(warning.details ?? [])]));
+    return;
+  }
+
+  warnings.push({
+    count: 1,
+    ...warning,
+    id,
+  });
 }
 
 function escapeAttribute(value: string) {
@@ -158,19 +201,9 @@ function getBricksMapping(element: ParsedElement) {
 
 function getAttributeSettings(element: ParsedElement) {
   const settings: Record<string, unknown> = {};
-  const attributes = Object.entries(element.attributes).filter(([name]) =>
-    name !== "class"
-  );
 
   if (element.attributes.id) {
     settings._cssId = element.attributes.id;
-  }
-
-  if (attributes.length > 0) {
-    settings._jigmaAttributes = attributes.map(([name, value]) => ({
-      name,
-      value,
-    }));
   }
 
   return settings;
@@ -213,7 +246,10 @@ function getContentSettings(element: ParsedElement, name: string) {
   }
 
   if (name === "svg") {
-    settings.svg = serializeElement(element, { path: "svg", skipScripts: true });
+    const rawSvg = element.rawHtml ?? serializeElement(element, { path: "svg", skipScripts: true });
+    const sanitized = sanitizeSvgMarkup(rawSvg);
+    settings.source = "code";
+    settings.code = sanitized.svg;
   }
 
   return settings;
@@ -270,6 +306,19 @@ function makeClassList(
   return Array.from(new Set([...strictBemClasses, ...validOriginalClasses]));
 }
 
+function makePreservedOriginalClassList(originalClasses: string[], warnings: ConversionWarning[]) {
+  return originalClasses.filter((className) => {
+    const valid = isValidClassName(className);
+    if (!valid) {
+      pushWarning(
+        warnings,
+        `Original class "${className}" is invalid and was not preserved.`,
+      );
+    }
+    return valid;
+  });
+}
+
 function buildExternalCode(
   options: OutputOptions,
   html: string,
@@ -303,7 +352,6 @@ function buildExternalCode(
       ? makeCodeElement("jigma-external-dependencies", "External dependencies", {
         executeCode: false,
         html: lines.join("\n"),
-        _jigmaReviewRequired: true,
       })
       : null,
   };
@@ -327,6 +375,7 @@ function addSelectorMapping(
 
 function createGlobalClasses(classNames: string[]) {
   const seen = new Set<string>();
+  const usedIds = new Set<string>();
   const globalClasses: BricksGlobalClass[] = [];
 
   classNames.forEach((className) => {
@@ -336,12 +385,9 @@ function createGlobalClasses(classNames: string[]) {
 
     seen.add(className);
     globalClasses.push({
-      id: makeGlobalClassId(className),
+      id: makeUniqueGlobalClassId(className, usedIds),
       name: className,
-      settings: {
-        _jigmaGeneratedBem: true,
-      },
-      _exists: false,
+      settings: {},
     });
   });
 
@@ -350,6 +396,141 @@ function createGlobalClasses(classNames: string[]) {
 
 function getGlobalClassIdMap(globalClasses: BricksGlobalClass[]) {
   return new Map(globalClasses.map((entry) => [entry.name, entry.id]));
+}
+
+function getNativeSettingCount(settings: Record<string, unknown>) {
+  return Object.keys(settings).filter((key) => key !== BRICKS_ELEMENT_CUSTOM_CSS_FIELD)
+    .length;
+}
+
+function getStringClasses(value: unknown) {
+  return typeof value === "string"
+    ? value.split(/\s+/).map((className) => className.trim()).filter(Boolean)
+    : [];
+}
+
+function auditBricksClassReferences(
+  content: BricksElement[],
+  globalClasses: BricksGlobalClass[],
+  styledClassIds: Set<string>,
+) {
+  const classById = new Map<string, BricksGlobalClass>();
+  const entriesById = new Map<string, BricksClassAuditEntry>();
+  const duplicateIds = new Set<string>();
+  const seenIds = new Set<string>();
+  const idsByName = new Map<string, Set<string>>();
+  const managedClassNames = new Set(globalClasses.map((globalClass) => globalClass.name));
+  let missingClassReferenceCount = 0;
+  let emptyStyledClassCount = 0;
+  let generatedClassOnlyInElementClassesCount = 0;
+
+  globalClasses.forEach((globalClass) => {
+    if (seenIds.has(globalClass.id)) {
+      duplicateIds.add(globalClass.id);
+    }
+    seenIds.add(globalClass.id);
+    classById.set(globalClass.id, globalClass);
+    entriesById.set(globalClass.id, {
+      className: globalClass.name,
+      classId: globalClass.id,
+      assignedElementIds: [],
+      nativeSettingsCount: getNativeSettingCount(globalClass.settings),
+      customCssPresent: typeof globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] === "string" &&
+        `${globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD]}`.trim().length > 0,
+      missingReferences: [],
+      conflicts: [],
+    });
+
+    const ids = idsByName.get(globalClass.name) ?? new Set<string>();
+    ids.add(globalClass.id);
+    idsByName.set(globalClass.name, ids);
+  });
+
+  const entries = [...entriesById.values()];
+
+  idsByName.forEach((ids, name) => {
+    if (ids.size <= 1) {
+      return;
+    }
+
+    ids.forEach((id) => {
+      entriesById.get(id)?.conflicts.push(
+        `Duplicate class name "${name}" is associated with multiple class IDs.`,
+      );
+    });
+  });
+
+  content.forEach((element) => {
+    const classIds = Array.isArray(element.settings._cssGlobalClasses)
+      ? element.settings._cssGlobalClasses.map((classId) => `${classId}`).filter(Boolean)
+      : [];
+
+    classIds.forEach((classId) => {
+      const entry = entriesById.get(classId);
+      if (!entry) {
+        missingClassReferenceCount += 1;
+        entries.push({
+          className: "(missing class record)",
+          classId,
+          assignedElementIds: [element.id],
+          nativeSettingsCount: 0,
+          customCssPresent: false,
+          missingReferences: [classId],
+          conflicts: [`Element "${element.id}" references a class ID that is missing from globalClasses.`],
+        });
+        return;
+      }
+
+      entry.assignedElementIds.push(element.id);
+    });
+
+    getStringClasses(element.settings._cssClasses).forEach((className) => {
+      if (!managedClassNames.has(className)) {
+        return;
+      }
+
+      generatedClassOnlyInElementClassesCount += 1;
+      const classRecord = globalClasses.find((globalClass) => globalClass.name === className);
+      const entry = classRecord ? entriesById.get(classRecord.id) : undefined;
+      entry?.conflicts.push(
+        `Generated class "${className}" also appears in _cssClasses instead of only _cssGlobalClasses.`,
+      );
+    });
+  });
+
+  styledClassIds.forEach((classId) => {
+    const globalClass = classById.get(classId);
+    const entry = entriesById.get(classId);
+    if (!globalClass || !entry) {
+      return;
+    }
+
+    if (
+      getNativeSettingCount(globalClass.settings) === 0 &&
+      !(typeof globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] === "string" &&
+        globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD].trim())
+    ) {
+      emptyStyledClassCount += 1;
+      entry.conflicts.push("CSS matched this generated class, but no native settings or custom CSS were saved.");
+    }
+  });
+
+  const duplicateClassNameCount = [...idsByName.values()].filter((ids) => ids.size > 1).length;
+  const valid = missingClassReferenceCount === 0 &&
+    duplicateIds.size === 0 &&
+    duplicateClassNameCount === 0 &&
+    emptyStyledClassCount === 0 &&
+    generatedClassOnlyInElementClassesCount === 0;
+
+  return {
+    entries,
+    valid,
+    missingClassReferenceCount,
+    duplicateClassIdCount: duplicateIds.size,
+    duplicateClassNameCount,
+    emptyStyledClassCount,
+    generatedClassOnlyInElementClassesCount,
+  };
 }
 
 function createGeneratedTextClass(blockName: string, assignment: BemClassAssignment) {
@@ -362,12 +543,86 @@ function createGeneratedTextClass(blockName: string, assignment: BemClassAssignm
   return `${blockName}__${suffix}`;
 }
 
+function getModifier(className: string) {
+  return className.includes("--") ? className.split("--").at(-1) ?? "" : "";
+}
+
+function getSourceClassesForGeneratedClass(
+  originalClasses: string[],
+  generatedClass: string,
+  classList: string[],
+) {
+  const sourceClasses = new Set<string>([generatedClass]);
+  const modifier = getModifier(generatedClass);
+  const modifiers = classList.map(getModifier).filter(Boolean);
+  const hasModifierClass = modifiers.length > 0;
+
+  originalClasses.forEach((className) => {
+    const lowerClassName = className.toLowerCase();
+    if (modifier) {
+      if (
+        lowerClassName.includes(`--${modifier}`) ||
+        lowerClassName === modifier ||
+        lowerClassName.endsWith(`-${modifier}`)
+      ) {
+        sourceClasses.add(className);
+      }
+      return;
+    }
+
+    if (
+      !hasModifierClass ||
+      (!lowerClassName.includes("--") && !modifiers.some((item) =>
+        lowerClassName === item || lowerClassName.endsWith(`-${item}`)
+      ))
+    ) {
+      sourceClasses.add(className);
+    }
+  });
+
+  return [...sourceClasses];
+}
+
+function createClassCssTargets(
+  pendingElements: PendingElement[],
+  globalClassIdMap: Map<string, string>,
+  globalClassById: Map<string, BricksGlobalClass>,
+) {
+  const targets: ClassCssTarget[] = [];
+
+  pendingElements.forEach((pending) => {
+    pending.classList.forEach((className) => {
+      const globalClassId = globalClassIdMap.get(className);
+      const globalClass = globalClassId ? globalClassById.get(globalClassId) : undefined;
+
+      if (!globalClass) {
+        return;
+      }
+
+      targets.push({
+        globalClass,
+        className,
+        sourceClasses: getSourceClassesForGeneratedClass(
+          pending.originalClasses,
+          className,
+          pending.classList,
+        ),
+        sourceId: className === pending.assignment.className
+          ? pending.parsedElement.attributes.id
+          : undefined,
+      });
+    });
+  });
+
+  return targets;
+}
+
 export function createBricksExport(input: ConversionInput): BricksExport {
   const warnings: ConversionWarning[] = [];
   const exportMode = input.options.exportMode;
-  const shouldAttachElementCss = exportMode === "element-styles" ||
-    exportMode === "global-classes";
-  const shouldCreateGlobalClasses = exportMode === "global-classes";
+  const shouldCreateNativeBemClasses = isNativeBemClassMode(exportMode);
+  const shouldAttachElementCss = exportMode === "element-styles";
+  const shouldCreateGlobalClasses = shouldCreateNativeBemClasses;
   const shouldCreateScopedCssBlock = exportMode === "scoped-css-block";
   const parsed = getRenderableRoots(input.html);
   const deletedLayerIds = input.deletedLayerIds ?? new Set<string>();
@@ -375,6 +630,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   const content: BricksElement[] = [];
   const contentById = new Map<string, BricksElement>();
   const pendingElements: PendingElement[] = [];
+  const classListByElementId = new Map<string, string[]>();
   const generatedClassNames: string[] = [];
   const scopeMap: CssSelectorScopeMap = {
     classes: new Map(),
@@ -388,6 +644,8 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   let unsupportedElementCount = 0;
   let generatedTextElementCount = 0;
   let classAttachmentCount = 0;
+  let unsignedSvgCodeCount = 0;
+  let unsignedJavaScriptCodeCount = 0;
 
   parsed.warnings.forEach((warning) => pushWarning(warnings, warning));
 
@@ -431,27 +689,39 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       originalClasses,
       warnings,
     );
+    const svgSanitization = mapping.name === "svg"
+      ? sanitizeSvgMarkup(element.rawHtml ?? serializeElement(element, { path: "svg", skipScripts: true }))
+      : null;
     const settings: Record<string, unknown> = {
       ...getAttributeSettings(element),
       ...getContentSettings(element, mapping.name),
-      _cssClasses: classList.join(" "),
-      _jigmaBemClass: assignment.className,
-      _jigmaClassMode: input.options.classMode,
     };
+
+    if (shouldCreateNativeBemClasses) {
+      const preservedClasses = input.options.classMode === "strict-bem"
+        ? []
+        : makePreservedOriginalClassList(originalClasses, warnings);
+      if (preservedClasses.length > 0) {
+        settings._cssClasses = preservedClasses.join(" ");
+      }
+    } else {
+      settings._cssClasses = classList.join(" ");
+    }
+
     classAttachmentCount += classList.length;
 
     if (input.options.classMode !== "strict-bem" && originalClasses.length > 0) {
-      settings._jigmaOriginalClasses = originalClasses;
+      pushWarning(warnings, "Original classes were preserved in _cssClasses because strict BEM mode is off.", "info");
     }
 
     if (!mapping.supported) {
-      settings._jigmaOriginalTag = element.tagName;
+      pushWarning(warnings, `<${element.tagName}> was converted to a Bricks Div fallback.`);
     } else if (
       WRAPPER_TAGS.has(element.tagName) &&
       mapping.name === "div" &&
       element.tagName !== "div"
     ) {
-      settings._jigmaOriginalTag = element.tagName;
+      pushWarning(warnings, `<${element.tagName}> was exported as a Bricks Div.`, "info");
     }
 
     const parentElement = parent === 0 ? undefined : contentById.get(parent);
@@ -468,15 +738,53 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     }));
     content.push(bricksElement);
     contentById.set(id, bricksElement);
-    generatedClassNames.push(assignment.className);
+    classListByElementId.set(id, classList);
+    generatedClassNames.push(...classList);
     pendingElements.push({
       element: bricksElement,
       parsedElement: element,
       assignment,
+      classList,
       originalClasses,
       path,
     });
-    addSelectorMapping(scopeMap, originalClasses, element.attributes.id, assignment.className);
+    classList.forEach((className) => {
+      addSelectorMapping(
+        scopeMap,
+        getSourceClassesForGeneratedClass(originalClasses, className, classList)
+          .filter((sourceClassName) => sourceClassName !== className),
+        element.attributes.id,
+        className,
+      );
+    });
+
+    if (mapping.name === "svg") {
+      unsignedSvgCodeCount += 1;
+      const internalNodeCount = countSvgInternalNodes(element.rawHtml ?? "");
+      const report = svgSanitization?.report;
+      const detailItems = [
+        internalNodeCount > 0
+          ? `Inline SVG contains ${internalNodeCount} internal SVG node${internalNodeCount === 1 ? "" : "s"} and was exported as one Bricks SVG element.`
+          : "Inline SVG was exported as one Bricks SVG element.",
+        ...(report?.removedTags.length ? [`Removed tags: ${report.removedTags.join(", ")}`] : []),
+        ...(report?.removedAttributes.length ? [`Removed attributes: ${report.removedAttributes.join(", ")}`] : []),
+        ...(report?.externalReferences.length ? [`External references: ${report.externalReferences.join(", ")}`] : []),
+        ...(report?.malformed ? ["SVG markup could not be parsed and requires manual review."] : []),
+      ];
+
+      pushGroupedWarning(warnings, {
+        id: `svg-signature:${id}`,
+        code: "svg.signature_required",
+        severity: report?.malformed ? "error" : "action-required",
+        title: "Signature required after import",
+        summary: `${bricksElement.label ?? "Inline SVG"} was preserved as one inline SVG element. Bricks signature required.`,
+        message: `${bricksElement.label ?? "Inline SVG"} was preserved as one inline SVG element. Bricks signature required.`,
+        ownerElementId: id,
+        ownerLabel: bricksElement.label,
+        details: detailItems,
+        suggestedAction: "After pasting into Bricks, review and sign this SVG through Bricks' code signature workflow.",
+      });
+    }
 
     const directText = getOwnText(element, 500);
     const isTextElement = ["heading", "text-basic", "button", "text-link"].includes(mapping.name);
@@ -490,9 +798,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
         children: [],
         settings: {
           text: directText,
-          _cssClasses: textClass,
-          _jigmaBemClass: textClass,
-          _jigmaGeneratedFrom: element.tagName,
+          ...(shouldCreateNativeBemClasses ? {} : { _cssClasses: textClass }),
         },
       }, createBricksElementLabel({
         bemClass: textClass,
@@ -501,6 +807,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       }));
       content.push(textElement);
       contentById.set(textId, textElement);
+      classListByElementId.set(textId, [textClass]);
       generatedClassNames.push(textClass);
       bricksElement.children.push(textId);
       generatedTextElementCount += 1;
@@ -541,6 +848,13 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       attachedRuleCount: 0,
       unmappedRuleCount: 0,
       pseudoSelectorCount: 0,
+      nativeStyleMappedCount: 0,
+      customCssFallbackCount: 0,
+      blockScopedFallbackCount: 0,
+      responsiveRuleCount: 0,
+      pseudoRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      styledClassIds: new Set<string>(),
     };
   elementCss.warnings.forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
 
@@ -555,18 +869,74 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     ? createGlobalClasses(generatedClassNames)
     : [];
   const globalClassIdMap = getGlobalClassIdMap(globalClasses);
+  const globalClassById = new Map(globalClasses.map((entry) => [entry.id, entry]));
+
   if (shouldCreateGlobalClasses) {
     content.forEach((element) => {
-      const bemClass = element.settings._jigmaBemClass;
-      if (typeof bemClass !== "string") {
-        return;
-      }
-
-      const globalClassId = globalClassIdMap.get(bemClass);
-      if (globalClassId) {
-        element.settings._cssGlobalClasses = [globalClassId];
+      const elementClassList = classListByElementId.get(element.id) ?? [];
+      const classIds = elementClassList
+        .map((className) => globalClassIdMap.get(className))
+        .filter((classId): classId is string => typeof classId === "string");
+      if (classIds.length > 0) {
+        element.settings._cssGlobalClasses = classIds;
       }
     });
+  }
+
+  const classCss = input.css.trim() && shouldCreateNativeBemClasses
+    ? attachCssToGlobalClasses(
+      input.css,
+      createClassCssTargets(pendingElements, globalClassIdMap, globalClassById),
+      { minify: input.options.minifyElementCss },
+    )
+    : {
+      warnings: [],
+      attachedRuleCount: 0,
+      unmappedRuleCount: 0,
+      pseudoSelectorCount: 0,
+      nativeStyleMappedCount: 0,
+      customCssFallbackCount: 0,
+      blockScopedFallbackCount: 0,
+      responsiveRuleCount: 0,
+      pseudoRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      styledClassIds: new Set<string>(),
+    };
+  classCss.warnings.forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
+
+  if (input.css.trim() && shouldCreateNativeBemClasses && classCss.attachedRuleCount === 0) {
+    pushWarning(
+      warnings,
+      "Input CSS did not contain selectors that could be safely attached to generated Bricks classes.",
+    );
+  }
+
+  const classAudit = shouldCreateGlobalClasses
+    ? auditBricksClassReferences(content, globalClasses, classCss.styledClassIds)
+    : {
+      entries: [],
+      valid: true,
+      missingClassReferenceCount: 0,
+      duplicateClassIdCount: 0,
+      duplicateClassNameCount: 0,
+      emptyStyledClassCount: 0,
+      generatedClassOnlyInElementClassesCount: 0,
+    };
+
+  if (!classAudit.valid) {
+    pushWarning(
+      warnings,
+      "Generated Bricks class references failed validation. Review the class audit before paste testing.",
+      "error",
+    );
+  }
+
+  if (classAudit.generatedClassOnlyInElementClassesCount > 0) {
+    pushWarning(
+      warnings,
+      "One or more generated Bricks classes were found in _cssClasses instead of native _cssGlobalClasses.",
+      "error",
+    );
   }
 
   const scopedCss = input.css.trim() && shouldCreateScopedCssBlock
@@ -593,7 +963,6 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       executeCode: false,
       css: scopedCss.css,
       cssCode: scopedCss.css,
-      _jigmaMode: "bem-css",
     }));
   }
 
@@ -605,10 +974,20 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   let jsWarningCount = 0;
   if (input.js.trim()) {
     jsWarningCount += 1;
-    pushWarning(
-      warnings,
-      "JavaScript was detected but not converted. Rebuild behavior manually in Bricks or review it as custom code.",
-    );
+    unsignedJavaScriptCodeCount += 1;
+    pushGroupedWarning(warnings, {
+      id: "javascript-review-required",
+      code: "javascript.review_required",
+      severity: "action-required",
+      title: "JavaScript review required",
+      summary: "JavaScript was detected but not converted into builder-native behavior.",
+      message: "JavaScript was detected but not converted into builder-native behavior.",
+      details: [
+        "Jigma does not silently insert JavaScript into the default Bricks structure.",
+        "Review behavior manually before adding it as custom code or a Bricks Code element.",
+      ],
+      suggestedAction: "Rebuild interactions with Bricks-native controls where possible, or add reviewed JavaScript manually.",
+    });
   }
 
   if (externalCode.dependencies.length > 0) {
@@ -633,13 +1012,16 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       label: "Jigma strict BEM Bricks structure",
       targetBricksVersion: TARGET_BRICKS_VERSION,
       stylingMode: "bem-css",
+      classAudit: classAudit.entries,
       notes: [
         `Generated BEM block: ${bemFactory.blockName}.`,
-        shouldCreateGlobalClasses
-          ? "Generated BEM classes are also registered as Bricks global classes."
+        shouldCreateNativeBemClasses
+          ? "Generated BEM classes are native editable Bricks classes assigned by ID."
           : "Generated BEM classes are attached directly as element classes.",
         shouldCreateScopedCssBlock
           ? "CSS was exported as a scoped generated CSS block."
+          : shouldCreateNativeBemClasses
+          ? "Matching CSS declarations are owned by generated Bricks class records."
           : shouldAttachElementCss
           ? "Matching CSS declarations were attached directly to exported elements."
           : "CSS output was disabled for structure-only export.",
@@ -659,12 +1041,27 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       classAttachmentCount,
       globalClassCount: globalClasses.length,
       bemClassCount: pendingElements.length + generatedTextElementCount,
-      cssAttachedRuleCount: elementCss.attachedRuleCount,
+      cssAttachedRuleCount: elementCss.attachedRuleCount + classCss.attachedRuleCount,
       cssScopedRuleCount: scopedCss.scopedRuleCount,
-      cssUnmappedRuleCount: scopedCss.unmappedRuleCount + elementCss.unmappedRuleCount,
+      cssUnmappedRuleCount: scopedCss.unmappedRuleCount + elementCss.unmappedRuleCount +
+        classCss.unmappedRuleCount,
       unusedSelectorCount: scopedCss.unusedSelectorCount,
-      nativeStyleMappedCount: 0,
-      customCssFallbackCount: shouldCreateScopedCssBlock && scopedCss.css.trim() ? 1 : 0,
+      nativeStyleMappedCount: elementCss.nativeStyleMappedCount + classCss.nativeStyleMappedCount,
+      customCssFallbackCount: elementCss.customCssFallbackCount + classCss.customCssFallbackCount +
+        (shouldCreateScopedCssBlock && scopedCss.css.trim() ? 1 : 0),
+      blockScopedFallbackCount: elementCss.blockScopedFallbackCount + classCss.blockScopedFallbackCount,
+      responsiveRuleCount: elementCss.responsiveRuleCount + classCss.responsiveRuleCount,
+      pseudoRuleCount: elementCss.pseudoRuleCount + classCss.pseudoRuleCount,
+      unresolvedSelectorCount: elementCss.unresolvedSelectorCount + classCss.unresolvedSelectorCount,
+      externalDependencyCount: externalCode.dependencies.length,
+      unsignedSvgCodeCount,
+      unsignedJavaScriptCodeCount,
+      groupedWarningCount: warnings.length,
+      classReferenceValid: classAudit.valid,
+      missingClassReferenceCount: classAudit.missingClassReferenceCount,
+      duplicateClassIdCount: classAudit.duplicateClassIdCount,
+      duplicateClassNameCount: classAudit.duplicateClassNameCount,
+      emptyStyledClassCount: classAudit.emptyStyledClassCount,
       dependencyWarningCount: externalCode.dependencies.length,
       jsWarningCount,
     },

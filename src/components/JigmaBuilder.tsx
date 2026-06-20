@@ -1,5 +1,22 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { templates } from "../../lib/templates.ts";
+import {
+  getTemplateByKey,
+  templates,
+} from "../../lib/templates.ts";
+import {
+  LEGACY_LOCAL_PRESETS_STORAGE_KEY,
+  LOCAL_PRESETS_STORAGE_KEY,
+  createLocalPreset,
+  deleteLocalPreset,
+  duplicateLocalPreset,
+  exportLocalPresetJson,
+  importLocalPresetJson,
+  parseLocalPresets,
+  renameLocalPreset,
+  serializeLocalPresets,
+  upsertLocalPreset,
+  type LocalJigmaPreset,
+} from "../../lib/presets.ts";
 import {
   collectLayerIds,
   getLayers,
@@ -11,12 +28,10 @@ import {
   DEFAULT_OUTPUT_ADAPTER,
   createOutputExport,
 } from "../../lib/output/adapters.ts";
-import {
-  PREVIEW_HOVER_INSPECTOR_ENABLED,
-  createPreviewDocument,
-} from "../../lib/preview/document.ts";
+import { createPreviewDocument } from "../../lib/preview/document.ts";
 import type {
   ClassMode,
+  ConversionSeverity,
   Device,
   EditorKind,
   ExportMode,
@@ -26,11 +41,11 @@ import type {
 
 const defaultOptions: OutputOptions = {
   stylingMode: "bem-css",
-  exportMode: "element-styles",
+  exportMode: "native-bem-classes",
   classMode: "strict-bem",
   projectPrefix: "jg",
   blockName: "hero-jigma",
-  createGlobalClasses: false,
+  createGlobalClasses: true,
   includeExternalCss: false,
   includeExternalScripts: false,
   minifyElementCss: false,
@@ -46,13 +61,7 @@ export const SOURCE_EDITOR_DEFINITIONS: {
   { kind: "js", label: "JavaScript", badge: "Review required" },
 ];
 
-const RECENT_PROJECTS = [
-  { title: "Jigma Hero Section", meta: "Updated just now", accent: "purple" },
-  { title: "Agency Portfolio", meta: "Updated 2h ago", accent: "teal" },
-  { title: "SaaS Landing Page", meta: "Updated yesterday", accent: "blue" },
-];
-
-const NAV_ITEMS = ["Convert", "Presets", "Docs"] as const;
+const NAV_ITEMS = ["Convert", "Templates", "Presets", "Docs"] as const;
 const outputAdapter = DEFAULT_OUTPUT_ADAPTER;
 // Auto Scroll disabled for MVP due to preview instability.
 export const AUTO_SCROLL_ENABLED = false;
@@ -83,11 +92,79 @@ interface EditorPasteEvent {
 }
 
 interface ConversionIssue {
-  severity: "info" | "warning" | "error";
+  severity: ConversionSeverity;
   message: string;
+  id?: string;
+  code?: string;
+  title?: string;
+  summary?: string;
+  count?: number;
+  ownerElementId?: string;
+  ownerLabel?: string;
+  details?: string[];
+  suggestedAction?: string;
 }
 
 type WorkflowTab = "layers" | "dependencies" | "warnings" | "export";
+type WarningFilter = "all" | "error" | "action-required" | "warning" | "notice";
+type WorkspaceTab = "code" | "preview" | "inspect" | "export";
+
+const WARNING_FILTERS: { id: WarningFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "error", label: "Errors" },
+  { id: "action-required", label: "Action required" },
+  { id: "warning", label: "Warnings" },
+  { id: "notice", label: "Notices" },
+];
+
+const WORKSPACE_TABS: { id: WorkspaceTab; label: string }[] = [
+  { id: "code", label: "Code" },
+  { id: "preview", label: "Preview" },
+  { id: "inspect", label: "Inspect" },
+  { id: "export", label: "Export" },
+];
+
+function normalizeSeverity(severity: ConversionSeverity): Exclude<ConversionSeverity, "info"> {
+  return severity === "info" ? "notice" : severity;
+}
+
+function groupConversionIssues(issues: ConversionIssue[]) {
+  const grouped = new Map<string, ConversionIssue>();
+
+  issues.forEach((issue) => {
+    const id = issue.id ?? issue.code ?? issue.message;
+    const existing = grouped.get(id);
+    if (!existing) {
+      grouped.set(id, {
+        ...issue,
+        id,
+        severity: normalizeSeverity(issue.severity),
+        count: issue.count ?? 1,
+      });
+      return;
+    }
+
+    const existingSeverity = normalizeSeverity(existing.severity);
+    const nextSeverity = normalizeSeverity(issue.severity);
+    const severityRank: Record<Exclude<ConversionSeverity, "info">, number> = {
+      notice: 0,
+      warning: 1,
+      "action-required": 2,
+      error: 3,
+    };
+
+    existing.count = (existing.count ?? 1) + (issue.count ?? 1);
+    existing.details = Array.from(new Set([...(existing.details ?? []), ...(issue.details ?? [])]));
+    existing.severity = severityRank[nextSeverity] > severityRank[existingSeverity]
+      ? nextSeverity
+      : existingSeverity;
+    existing.summary = existing.summary ?? issue.summary;
+    existing.title = existing.title ?? issue.title;
+    existing.suggestedAction = existing.suggestedAction ?? issue.suggestedAction;
+  });
+
+  return [...grouped.values()];
+}
 
 function makeLayerSnapshot(
   selectedLayerIds: Set<string>,
@@ -107,32 +184,50 @@ function collectBranchIds(node: LayerNode) {
   return collectLayerIds([node]);
 }
 
+function readSavedPresets() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const current = parseLocalPresets(window.localStorage.getItem(LOCAL_PRESETS_STORAGE_KEY));
+    if (current.length > 0) {
+      return current;
+    }
+
+    return parseLocalPresets(window.localStorage.getItem(LEGACY_LOCAL_PRESETS_STORAGE_KEY));
+  } catch {
+    return [];
+  }
+}
+
+function writeSavedPresets(presets: LocalJigmaPreset[]) {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    window.localStorage.setItem(LOCAL_PRESETS_STORAGE_KEY, serializeLocalPresets(presets));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getEditorHint(kind: EditorKind) {
   if (kind === "html") {
     return "Paste the section structure you want to rebuild in Bricks.";
   }
 
   if (kind === "css") {
-    return "CSS is scoped to generated strict BEM classes by default.";
+    return "CSS is mapped onto editable Bricks BEM classes by default.";
   }
 
   return "Optional custom code. Jigma flags it for manual Bricks review.";
 }
 
 function getLayerDisplayName(node: LayerNode) {
-  if (node.elementId) {
-    return `${node.tagName}#${node.elementId}`;
-  }
-
-  if (node.classes.length > 0) {
-    return `${node.tagName}.${node.classes[0]}`;
-  }
-
-  if (node.text) {
-    return `${node.tagName} "${node.text}"`;
-  }
-
-  return node.tagName;
+  return getReadableLayerName(node);
 }
 
 function getTagChip(tagName: string) {
@@ -145,33 +240,13 @@ function getTagChip(tagName: string) {
     : tagName.toUpperCase();
 }
 
-function getLayerIconType(tagName: string) {
-  if (tagName === "section" || tagName === "article" || tagName === "main") {
-    return "section";
-  }
-
-  if (/^h[1-6]$/.test(tagName) || tagName === "p" || tagName === "span" || tagName === "strong") {
-    return "text";
-  }
-
-  if (tagName === "img" || tagName === "svg" || tagName === "picture") {
-    return "media";
-  }
-
-  if (tagName === "a" || tagName === "button") {
-    return "action";
-  }
-
-  return "box";
-}
-
 function getExportModeLabel(mode: ExportMode) {
-  if (mode === "element-styles") {
-    return "Element styles";
+  if (mode === "native-bem-classes" || mode === "global-classes") {
+    return "Native Bricks Classes";
   }
 
-  if (mode === "global-classes") {
-    return "Bricks/global classes";
+  if (mode === "element-styles") {
+    return "Element ID Styles";
   }
 
   if (mode === "scoped-css-block") {
@@ -181,66 +256,192 @@ function getExportModeLabel(mode: ExportMode) {
   return "Structure only";
 }
 
+const LABEL_PREFIX_WORDS = new Set(["acme", "demo", "jg", "jig", "jigma", "lit", "prefix", "ui"]);
+
+function titleCase(value: string) {
+  if (value.toLowerCase() === "cta") {
+    return "CTA";
+  }
+
+  if (value.toLowerCase() === "svg") {
+    return "SVG";
+  }
+
+  return value
+    .split("-")
+    .filter(Boolean)
+    .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1).toLowerCase()}`)
+    .join(" ");
+}
+
+function classToReadableLabel(className: string, tagName: string) {
+  const [blockPart, rawElementPart = ""] = className.split("__");
+  const [elementPart = "", modifierPart = ""] = rawElementPart.split("--");
+  let blockWords = blockPart.split("-").filter(Boolean);
+
+  while (blockWords.length > 1 && LABEL_PREFIX_WORDS.has(blockWords[0].toLowerCase())) {
+    blockWords = blockWords.slice(1);
+  }
+
+  if (elementPart) {
+    return [titleCase(blockWords.join("-")), titleCase(elementPart), titleCase(modifierPart)]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  const suffix = tagName === "section"
+    ? "Section"
+    : tagName === "article"
+    ? "Card"
+    : tagName === "svg"
+    ? "SVG"
+    : "";
+  return [titleCase(blockWords.join("-")), suffix].filter(Boolean).join(" ");
+}
+
+function getReadableLayerName(node: LayerNode) {
+  if (node.classes[0]) {
+    return classToReadableLabel(node.classes[0], node.tagName);
+  }
+
+  if (node.text) {
+    return node.text;
+  }
+
+  return getTagChip(node.tagName);
+}
+
+function getLayerBemText(node: LayerNode) {
+  if (node.classes.length > 0) {
+    return node.classes.slice(0, 2).join(" ");
+  }
+
+  if (node.elementId) {
+    return `#${node.elementId}`;
+  }
+
+  return node.tagName;
+}
+
+function getTokenClass(kind: EditorKind, token: string) {
+  if (!token) {
+    return "token";
+  }
+
+  if (kind === "html") {
+    if (/^<\/?[a-z][\w:-]*/i.test(token) || /^\/?>$/.test(token)) {
+      return "token token--tag";
+    }
+    if (/^[\w:-]+(?==)$/.test(token)) {
+      return "token token--attr";
+    }
+    if (/^["']/.test(token)) {
+      return "token token--string";
+    }
+  }
+
+  if (kind === "css") {
+    if (/^--?[\w-]+(?=\s*:)?$/.test(token)) {
+      return "token token--property";
+    }
+    if (/^[.#][\w-]+$/.test(token)) {
+      return "token token--selector";
+    }
+    if (/^[@{}:;(),]$/.test(token)) {
+      return "token token--punctuation";
+    }
+    if (/^["']/.test(token) || /^#[0-9a-f]{3,8}$/i.test(token)) {
+      return "token token--string";
+    }
+  }
+
+  if (kind === "js") {
+    if (/^(const|let|var|function|return|if|else|for|while|import|export|from|async|await|new|class)$/.test(token)) {
+      return "token token--keyword";
+    }
+    if (/^["'`]/.test(token)) {
+      return "token token--string";
+    }
+    if (/^\/\/|^\/\*/.test(token)) {
+      return "token token--comment";
+    }
+    if (/^\d+(?:\.\d+)?$/.test(token)) {
+      return "token token--number";
+    }
+  }
+
+  return "token";
+}
+
+function tokenizeCodeLine(kind: EditorKind, line: string) {
+  const pattern = kind === "html"
+    ? /(<\/?[a-z][\w:-]*|\/?>|[\w:-]+(?==)|"[^"]*"|'[^']*')/gi
+    : kind === "css"
+    ? /([.#][\w-]+|--?[\w-]+(?=\s*:)|#[0-9a-f]{3,8}\b|@[\w-]+|[{}:;(),]|"[^"]*"|'[^']*')/gi
+    : /(\/\/.*|\/\*[\s\S]*?\*\/|`[^`]*`|"[^"]*"|'[^']*'|\b(?:const|let|var|function|return|if|else|for|while|import|export|from|async|await|new|class)\b|\b\d+(?:\.\d+)?\b)/g;
+
+  return line.split(pattern).filter((token) => token !== "");
+}
+
+function renderHighlightedCode(kind: EditorKind, value: string) {
+  const lines = value.split("\n");
+  return lines.map((line, lineIndex) => (
+    <span className="code-highlight__line" key={`${lineIndex}-${line}`}>
+      {tokenizeCodeLine(kind, line).map((token, tokenIndex) => (
+        <span className={getTokenClass(kind, token)} key={`${tokenIndex}-${token}`}>
+          {token}
+        </span>
+      ))}
+      {line.length === 0 ? "\n" : null}
+    </span>
+  ));
+}
+
 function CodeEditor(props: {
   kind: EditorKind;
   label: string;
   badge?: string;
+  active: boolean;
   value: string;
   onChange: (value: string) => void;
-  onFormat: () => void;
-  onCopy: () => void;
-  onClear: () => void;
   onPaste: (event: EditorPasteEvent) => void;
 }) {
   const lineCount = Math.max(1, props.value.split("\n").length);
+  const editorStyle = {
+    "--editor-lines": lineCount,
+  } as CSSProperties;
 
   return (
-    <section className="editor-card" aria-label={`${props.label} source editor`}>
-      <div className="editor-card__bar">
-        <div>
-          <p className="editor-card__kind">{props.kind.toUpperCase()}</p>
-          <div className="editor-card__title">
-            <h3>{props.label}</h3>
-            {props.badge && <span>{props.badge}</span>}
+    <section
+      id={`source-panel-${props.kind}`}
+      className={props.active ? "editor-card editor-card--active" : "editor-card"}
+      role="tabpanel"
+      aria-labelledby={`source-tab-${props.kind}`}
+      aria-label={`${props.label} source editor`}
+      hidden={!props.active}
+    >
+      <div className="code-editor-shell" style={editorStyle}>
+        <div className="code-editor-scroll">
+          <div className="code-lines" aria-hidden="true">
+            {Array.from({ length: lineCount }, (_, index) => (
+              <span key={index}>{index + 1}</span>
+            ))}
+          </div>
+          <div className="code-layer">
+            <pre className="code-highlight" aria-hidden="true">
+              {renderHighlightedCode(props.kind, props.value)}
+            </pre>
+            <textarea
+              className="code-editor"
+              spellCheck={false}
+              value={props.value}
+              onPaste={props.onPaste}
+              onChange={(event) =>
+                props.onChange((event.currentTarget as HTMLTextAreaElement).value)}
+              aria-label={`${props.label} source`}
+            />
           </div>
         </div>
-        <div className="editor-card__actions">
-          <button type="button" className="tool-button" onClick={props.onFormat}>
-            Format
-          </button>
-          <button
-            type="button"
-            className="tool-button"
-            disabled={!props.value}
-            onClick={props.onCopy}
-          >
-            Copy
-          </button>
-          <button
-            type="button"
-            className="tool-button tool-button--quiet"
-            disabled={!props.value}
-            onClick={props.onClear}
-          >
-            Clear
-          </button>
-        </div>
-      </div>
-      <div className="code-editor-shell">
-        <div className="code-lines" aria-hidden="true">
-          {Array.from({ length: lineCount }, (_, index) => (
-            <span key={index}>{index + 1}</span>
-          ))}
-        </div>
-        <textarea
-          className="code-editor"
-          spellCheck={false}
-          value={props.value}
-          onPaste={props.onPaste}
-          onChange={(event) =>
-            props.onChange((event.currentTarget as HTMLTextAreaElement).value)}
-          aria-label={`${props.label} source`}
-        />
       </div>
     </section>
   );
@@ -263,7 +464,6 @@ function LayerBranch(props: {
   const isExpanded = props.expandedLayerIds.has(props.node.id);
   const isActive = props.activeLayerId === props.node.id;
   const hasChildren = props.node.children.length > 0;
-  const iconType = getLayerIconType(props.node.tagName);
   const rowStyle = {
     "--layer-depth": `${props.depth * 13}px`,
   } as CSSProperties;
@@ -296,10 +496,11 @@ function LayerBranch(props: {
           className="layer-row__main"
           onClick={() => props.onActivate(props.node.id)}
         >
-          <span className={`layer-icon layer-icon--${iconType}`} aria-hidden="true" />
           <span className="layer-row__label">
             <span className="layer-row__name">{getLayerDisplayName(props.node)}</span>
-            {props.node.text && <span className="layer-row__text">{props.node.text}</span>}
+            <span className="layer-row__text" title={getLayerBemText(props.node)}>
+              {getLayerBemText(props.node)}
+            </span>
           </span>
         </button>
         <span className="layer-row__chip">{getTagChip(props.node.tagName)}</span>
@@ -419,14 +620,22 @@ export default function JigmaBuilder() {
   const [activeLayerId, setActiveLayerId] = useState<string | null>(
     initialLayerIds[0] ?? null,
   );
-  const [highlightsEnabled, setHighlightsEnabled] = useState(false);
   const [status, setStatus] = useState("Ready to convert");
   const [messages, setMessages] = useState<EditorMessage[]>([]);
   const [runtimeErrors, setRuntimeErrors] = useState<string[]>([]);
   const [showJson, setShowJson] = useState(false);
   const [showConversionDetails, setShowConversionDetails] = useState(false);
+  const [showAllWarnings, setShowAllWarnings] = useState(false);
+  const [warningFilter, setWarningFilter] = useState<WarningFilter>("all");
+  const [activeEditorKind, setActiveEditorKind] = useState<EditorKind>("html");
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>("code");
+  const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
   const [activeWorkflowTab, setActiveWorkflowTab] = useState<WorkflowTab>("layers");
   const [showAdvancedExport, setShowAdvancedExport] = useState(false);
+  const [savedPresets, setSavedPresets] = useState<LocalJigmaPreset[]>(
+    () => readSavedPresets(),
+  );
+  const [activePresetId, setActivePresetId] = useState("");
 
   const layers = useMemo(() => getLayers(preview.html), [preview.html]);
   const allLayerIds = useMemo(() => collectLayerIds(layers), [layers]);
@@ -434,6 +643,29 @@ export default function JigmaBuilder() {
     () => inspectDependencies(preview.html, preview.css, preview.js),
     [preview.html, preview.css, preview.js],
   );
+  const dependencyGroups = useMemo(() => {
+    const labels: Record<string, string> = {
+      font: "Fonts",
+      stylesheet: "Stylesheets",
+      script: "Scripts",
+      image: "Images",
+      svg: "SVGs",
+      library: "Libraries",
+      cdn: "Libraries",
+      "css-variable": "CSS Variables",
+    };
+    const order = ["Fonts", "Stylesheets", "Scripts", "Images", "SVGs", "Libraries", "CSS Variables"];
+    const groups = new Map<string, typeof dependencies>();
+
+    dependencies.forEach((dependency) => {
+      const label = labels[dependency.type] ?? "Other";
+      groups.set(label, [...(groups.get(label) ?? []), dependency]);
+    });
+
+    return order
+      .filter((label) => groups.has(label))
+      .map((label) => ({ label, items: groups.get(label) ?? [] }));
+  }, [dependencies]);
   const excludedLayerIds = useMemo(() => {
     const excluded = new Set<string>(deletedLayerIds);
     allLayerIds.forEach((id) => {
@@ -456,7 +688,7 @@ export default function JigmaBuilder() {
     [preview.html, preview.css, preview.js, options, excludedLayerIds, deletedLayerIds],
   );
   const bricksJson = useMemo(() => JSON.stringify(bricksExport, null, 2), [bricksExport]);
-  const previewInspectorActive = PREVIEW_HOVER_INSPECTOR_ENABLED && highlightsEnabled;
+  const previewInspectorActive = false;
   const previewDocument = useMemo(
     () =>
       createPreviewDocument({
@@ -472,7 +704,6 @@ export default function JigmaBuilder() {
       preview.css,
       preview.js,
       deletedLayerIds,
-      previewInspectorActive,
     ],
   );
 
@@ -534,12 +765,12 @@ export default function JigmaBuilder() {
     setOptions((current) => ({
       ...current,
       exportMode,
-      createGlobalClasses: exportMode === "global-classes",
+      createGlobalClasses: exportMode === "native-bem-classes" || exportMode === "global-classes",
     }));
   };
 
   const loadTemplate = (templateKey: string) => {
-    const template = templates.find((item) => item.key === templateKey);
+    const template = getTemplateByKey(templateKey);
     if (!template) {
       return;
     }
@@ -547,6 +778,11 @@ export default function JigmaBuilder() {
     setHtml(template.html);
     setCss(template.css);
     setJs(template.js);
+    setOptions((current) => ({
+      ...current,
+      projectPrefix: template.prefix,
+      blockName: template.blockName,
+    }));
     setPreview({
       html: template.html,
       css: template.css,
@@ -558,6 +794,114 @@ export default function JigmaBuilder() {
     setRuntimeErrors([]);
     setMessages([]);
     setStatus(`${template.name} loaded`);
+  };
+
+  const saveLocalPreset = () => {
+    const preset = createLocalPreset(options);
+    const nextPresets = upsertLocalPreset(savedPresets, preset);
+    setSavedPresets(nextPresets);
+    setActivePresetId(preset.id);
+    const saved = writeSavedPresets(nextPresets);
+    setStatus(saved ? "Preset saved locally" : "Preset saved for this session");
+  };
+
+  const loadLocalPreset = (presetId: string) => {
+    const preset = savedPresets.find((item) => item.id === presetId);
+    if (!preset) {
+      setActivePresetId("");
+      return;
+    }
+
+    setOptions((current) => ({
+      ...current,
+      projectPrefix: preset.projectPrefix,
+      blockName: preset.blockName,
+    }));
+    setActivePresetId(preset.id);
+    setStatus(`${preset.name} loaded`);
+  };
+
+  const renameSelectedPreset = () => {
+    const preset = savedPresets.find((item) => item.id === activePresetId);
+    if (!preset || typeof window === "undefined") {
+      return;
+    }
+
+    const nextName = window.prompt("Rename preset", preset.name);
+    if (!nextName) {
+      return;
+    }
+
+    const nextPresets = renameLocalPreset(savedPresets, preset.id, nextName);
+    setSavedPresets(nextPresets);
+    writeSavedPresets(nextPresets);
+    setStatus("Preset renamed");
+  };
+
+  const duplicateSelectedPreset = () => {
+    if (!activePresetId) {
+      return;
+    }
+
+    const nextPresets = duplicateLocalPreset(savedPresets, activePresetId);
+    setSavedPresets(nextPresets);
+    writeSavedPresets(nextPresets);
+    setActivePresetId(nextPresets[0]?.id ?? "");
+    setStatus("Preset duplicated");
+  };
+
+  const deleteSelectedPreset = () => {
+    if (!activePresetId) {
+      return;
+    }
+
+    const nextPresets = deleteLocalPreset(savedPresets, activePresetId);
+    setSavedPresets(nextPresets);
+    writeSavedPresets(nextPresets);
+    setActivePresetId("");
+    setStatus("Preset deleted");
+  };
+
+  const exportSelectedPreset = async () => {
+    const preset = savedPresets.find((item) => item.id === activePresetId);
+    if (!preset) {
+      return;
+    }
+
+    const json = exportLocalPresetJson(preset);
+    try {
+      await navigator.clipboard.writeText(json);
+      setStatus("Preset JSON copied");
+    } catch {
+      setStatus("Preset JSON ready in Advanced output");
+      setMessages((current) => [
+        ...current,
+        { kind: "export", message: json },
+      ]);
+    }
+  };
+
+  const importPresetFromJson = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const rawJson = window.prompt("Paste preset JSON");
+    if (!rawJson) {
+      return;
+    }
+
+    const result = importLocalPresetJson(rawJson);
+    if (!result.valid || !result.preset) {
+      setStatus(result.errors[0] ?? "Preset import failed");
+      return;
+    }
+
+    const nextPresets = upsertLocalPreset(savedPresets, result.preset);
+    setSavedPresets(nextPresets);
+    setActivePresetId(result.preset.id);
+    writeSavedPresets(nextPresets);
+    setStatus("Preset imported");
   };
 
   const runCode = () => {
@@ -759,6 +1103,45 @@ export default function JigmaBuilder() {
     }
   };
 
+  const downloadBricksJson = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const blob = new Blob([bricksJson], { type: "application/json" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `jigma-${activeTemplateLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "export"}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    setStatus("Bricks JSON downloaded");
+  };
+
+  const openPreviewWindow = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const previewWindow = window.open("", "_blank", "noopener,noreferrer");
+    if (!previewWindow) {
+      setStatus("Preview window blocked");
+      return;
+    }
+
+    previewWindow.document.open();
+    previewWindow.document.write(previewDocument);
+    previewWindow.document.close();
+  };
+
+  const showAllWarningsInInspector = () => {
+    setActiveWorkflowTab("warnings");
+    setWorkspaceTab("inspect");
+    setShowAllWarnings(true);
+  };
+
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const data = event.data as {
@@ -793,21 +1176,60 @@ export default function JigmaBuilder() {
   const dependencyWarnings = dependencies
     .filter((dependency) => dependency.warning)
     .map((dependency): ConversionIssue => ({
-      severity: "warning",
+      id: `dependency:${dependency.id}`,
+      code: "dependency.review",
+      severity: "notice",
+      title: "Dependency review",
+      summary: dependency.warning ?? dependency.label,
       message: dependency.warning ?? dependency.label,
+      details: [`${dependency.label}: ${dependency.value}`],
+      suggestedAction: "Confirm this dependency is available in the final Bricks site before publishing.",
     }));
   const conversionIssues: ConversionIssue[] = [
-    ...bricksExport.warnings.map((warning) => ({
+    ...bricksExport.warnings.map((warning): ConversionIssue => ({
+      id: warning.id,
+      code: warning.code,
       severity: warning.severity,
       message: warning.message,
+      title: warning.title,
+      summary: warning.summary,
+      count: warning.count,
+      ownerElementId: warning.ownerElementId,
+      ownerLabel: warning.ownerLabel,
+      details: warning.details,
+      suggestedAction: warning.suggestedAction,
     })),
-    ...runtimeErrors.map((message) => ({ severity: "error" as const, message })),
+    ...runtimeErrors.map((message): ConversionIssue => ({
+      id: `runtime:${message}`,
+      code: "preview.runtime_error",
+      severity: "error",
+      title: "Preview runtime error",
+      message,
+      summary: message,
+      suggestedAction: "Review the preview JavaScript or remove custom code before export.",
+    })),
     ...dependencyWarnings,
   ];
-  const warningCount = conversionIssues.length;
-  const errorCount = conversionIssues.filter((issue) => issue.severity === "error").length;
+  const groupedConversionIssues = useMemo(
+    () => groupConversionIssues(conversionIssues),
+    [conversionIssues],
+  );
+  const severityCounts = groupedConversionIssues.reduce(
+    (counts, issue) => {
+      const severity = normalizeSeverity(issue.severity);
+      counts[severity] += 1;
+      return counts;
+    },
+    { error: 0, "action-required": 0, warning: 0, notice: 0 },
+  );
+  const warningCount = groupedConversionIssues.length;
+  const totalIssueCount = groupedConversionIssues.reduce((total, issue) => total + (issue.count ?? 1), 0);
+  const errorCount = severityCounts.error;
+  const actionRequiredCount = severityCounts["action-required"];
   const statusBadgeLabel = errorCount > 0
     ? `${errorCount} error${errorCount === 1 ? "" : "s"}`
+    : actionRequiredCount > 0
+    ? `${actionRequiredCount} action required`
     : warningCount > 0
     ? `${warningCount} warning${warningCount === 1 ? "" : "s"}`
     : "Ready";
@@ -819,7 +1241,11 @@ export default function JigmaBuilder() {
   const previewStageStyle = {
     "--preview-width": `${previewWidth}px`,
   } as CSSProperties;
-  const visibleConversionIssues = conversionIssues.slice(0, showConversionDetails ? 8 : 2);
+  const visibleConversionIssues = groupedConversionIssues.slice(0, showConversionDetails ? 8 : 2);
+  const filteredWarningGroups = warningFilter === "all"
+    ? groupedConversionIssues
+    : groupedConversionIssues.filter((issue) => normalizeSeverity(issue.severity) === warningFilter);
+  const visibleWarningGroups = showAllWarnings ? filteredWarningGroups : filteredWarningGroups.slice(0, 5);
   const workflowTabs: { id: WorkflowTab; label: string; count?: number }[] = [
     { id: "layers", label: "Layers", count: selectedCount },
     { id: "dependencies", label: "Dependencies", count: dependencies.length },
@@ -840,6 +1266,11 @@ export default function JigmaBuilder() {
               key={item}
               type="button"
               className={item === "Convert" ? "nav-button nav-button--active" : "nav-button"}
+              onClick={() => {
+                if (item === "Templates" || item === "Presets") {
+                  setLeftDrawerOpen(true);
+                }
+              }}
             >
               <span className={`nav-icon nav-icon--${item.toLowerCase()}`} aria-hidden="true" />
               {item}
@@ -847,6 +1278,13 @@ export default function JigmaBuilder() {
           ))}
         </nav>
         <div className="product-bar__actions">
+          <button
+            type="button"
+            className="secondary-button library-button"
+            onClick={() => setLeftDrawerOpen(true)}
+          >
+            Library
+          </button>
           <span className="status-pill status-pill--target">
             {outputAdapter.targetLabel} {outputAdapter.targetVersion}
           </span>
@@ -860,33 +1298,92 @@ export default function JigmaBuilder() {
         </div>
       </header>
 
+      <nav className="workspace-mode-tabs" aria-label="Workspace sections">
+        {WORKSPACE_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={workspaceTab === tab.id}
+            className={workspaceTab === tab.id
+              ? "workspace-mode-tab workspace-mode-tab--active"
+              : "workspace-mode-tab"}
+            onClick={() => {
+              setWorkspaceTab(tab.id);
+              if (tab.id === "export") {
+                setActiveWorkflowTab("export");
+              }
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
       <section className="app-workspace">
-        <aside className="left-sidebar">
+        {leftDrawerOpen && (
+          <button
+            type="button"
+            className="drawer-backdrop"
+            aria-label="Close library drawer"
+            onClick={() => setLeftDrawerOpen(false)}
+          />
+        )}
+        <aside className={leftDrawerOpen ? "left-sidebar left-sidebar--open" : "left-sidebar"}>
+          <div className="drawer-header">
+            <strong>Library</strong>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Close library drawer"
+              onClick={() => setLeftDrawerOpen(false)}
+            >
+              x
+            </button>
+          </div>
+          <section className="app-panel template-panel">
+            <div className="panel-heading">
+              <p className="panel__kicker">Template Library</p>
+              <h2>Load example</h2>
+            </div>
+            <div className="template-list">
+              {templates.map((template) => (
+                <button
+                  key={template.key}
+                  type="button"
+                  className={activeTemplate === template.key
+                    ? "template-card template-card--active"
+                    : "template-card"}
+                  onClick={() => loadTemplate(template.key)}
+                >
+                  <span className={`template-thumb template-thumb--${template.thumbnail}`} aria-hidden="true" />
+                  <span className="template-card__copy">
+                    <strong>{template.name}</strong>
+                    <span>{template.description}</span>
+                    <em>{template.category}</em>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           <section className="app-panel settings-panel">
             <div className="panel-heading">
-              <p className="panel__kicker">Project Settings</p>
+              <p className="panel__kicker">Current Preset</p>
+              <h2>BEM naming</h2>
             </div>
-            <label className="field-group">
-              <span>Preset</span>
-              <select value={activeTemplate} onChange={(event) => loadTemplate(event.currentTarget.value)}>
-                {activeTemplate === "custom" && <option value="custom">Custom section</option>}
-                {templates.map((template) => (
-                  <option key={template.key} value={template.key}>
-                    {template.name}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label className="field-group">
               <span>Project Prefix</span>
               <input
                 type="text"
                 value={options.projectPrefix}
-                onChange={(event) =>
+                onChange={(event) => {
+                  setActivePresetId("");
                   setOption(
                     "projectPrefix",
                     (event.currentTarget as HTMLInputElement).value,
-                  )}
+                  );
+                }}
               />
             </label>
             <label className="field-group">
@@ -894,129 +1391,208 @@ export default function JigmaBuilder() {
               <input
                 type="text"
                 value={options.blockName}
-                onChange={(event) =>
+                onChange={(event) => {
+                  setActivePresetId("");
                   setOption(
                     "blockName",
                     (event.currentTarget as HTMLInputElement).value,
-                  )}
+                  );
+                }}
               />
               <small>This is the fallback wrapper class when source semantics are unclear.</small>
             </label>
             <button
               type="button"
               className="primary-button primary-button--wide"
-              onClick={() => setStatus("Preset saved for this session")}
+              onClick={saveLocalPreset}
             >
-              Save Preset
+              Save Preset locally
             </button>
-          </section>
-
-          <details className="app-panel recent-panel">
-            <summary className="panel__kicker">Recent</summary>
-            <div className="recent-list">
-              {RECENT_PROJECTS.map((project) => (
-                <article className="recent-card" key={project.title}>
-                  <span className={`recent-thumb recent-thumb--${project.accent}`} aria-hidden="true" />
-                  <div>
-                    <h3>{project.title}</h3>
-                    <p>{project.meta}</p>
-                  </div>
-                  {project.meta === "Updated just now" && <span className="recent-dot" aria-hidden="true" />}
-                </article>
-              ))}
+            <label className="field-group">
+              <span>Load Preset locally</span>
+              <select
+                value={activePresetId}
+                disabled={savedPresets.length === 0}
+                onChange={(event) => loadLocalPreset(event.currentTarget.value)}
+              >
+                <option value="">
+                  {savedPresets.length === 0 ? "No saved presets" : "Choose saved preset"}
+                </option>
+                {savedPresets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name}
+                  </option>
+                ))}
+              </select>
+              <small>Saved in this browser only. No account required.</small>
+            </label>
+            <div className="preset-actions" aria-label="Preset actions">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!activePresetId}
+                onClick={renameSelectedPreset}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!activePresetId}
+                onClick={duplicateSelectedPreset}
+              >
+                Duplicate
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!activePresetId}
+                onClick={exportSelectedPreset}
+              >
+                Export JSON
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={importPresetFromJson}
+              >
+                Import JSON
+              </button>
+              <button
+                type="button"
+                className="secondary-button secondary-button--danger"
+                disabled={!activePresetId}
+                onClick={deleteSelectedPreset}
+              >
+                Delete
+              </button>
             </div>
-            <button type="button" className="secondary-button secondary-button--wide">
-              View All Projects
-            </button>
-          </details>
+          </section>
         </aside>
 
-        <main className="center-workspace">
-          <section className="workspace-toolbar app-panel">
-            <div className="source-heading" aria-label="Source editors">
-              <p className="panel__kicker">Source</p>
-              <h2>HTML / CSS / JavaScript</h2>
-            </div>
-            <div className="toolbar-actions">
-              <button type="button" className="run-button" onClick={runCode}>
-                Run Preview
-              </button>
-              <div className="device-control" aria-label="Preview device size">
-                {(["desktop", "tablet", "mobile"] as const).map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    className={device === item
-                      ? `device-button device-button--${item} device-button--active`
-                      : `device-button device-button--${item}`}
-                    onClick={() => setDevice(item)}
-                    aria-label={`${item} preview`}
-                  />
-                ))}
-              </div>
-              <label className="width-control">
-                <input
-                  type="number"
-                  min={320}
-                  max={1600}
-                  step={20}
-                  value={previewWidth}
-                  onChange={(event) =>
-                    setPreviewWidth(Number((event.currentTarget as HTMLInputElement).value) || 1280)}
-                />
-                <span>px</span>
-              </label>
-            </div>
-          </section>
-
+        <main className="center-workspace" data-workspace-tab={workspaceTab}>
           <section className="builder-split">
-            <section className="code-pane app-panel">
-              <div className="source-editor-stack">
+            <section className={workspaceTab === "code" ? "code-pane workspace-pane workspace-pane--mobile-active" : "code-pane workspace-pane"}>
+              <section className="source-editor-panel app-panel" aria-label="Source editor">
+                <div className="source-editor-header">
+                  <div>
+                    <p className="panel__kicker">Source</p>
+                    <h2>{SOURCE_EDITOR_DEFINITIONS.find((editor) => editor.kind === activeEditorKind)?.label}</h2>
+                  </div>
+                  <div className="editor-card__actions">
+                    <button type="button" className="tool-button" onClick={() => formatCode(activeEditorKind)}>
+                      Format
+                    </button>
+                    <button
+                      type="button"
+                      className="tool-button"
+                      disabled={!getEditorValue(activeEditorKind)}
+                      onClick={() => copyEditorCode(activeEditorKind)}
+                    >
+                      Copy
+                    </button>
+                    <button
+                      type="button"
+                      className="tool-button tool-button--quiet"
+                      disabled={!getEditorValue(activeEditorKind)}
+                      onClick={() => clearEditorCode(activeEditorKind)}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="source-tabs" role="tablist" aria-label="Source editors">
+                  {SOURCE_EDITOR_DEFINITIONS.map((editor) => (
+                    <button
+                      key={editor.kind}
+                      id={`source-tab-${editor.kind}`}
+                      type="button"
+                      role="tab"
+                      aria-controls={`source-panel-${editor.kind}`}
+                      aria-selected={activeEditorKind === editor.kind}
+                      className={activeEditorKind === editor.kind
+                        ? "source-tab source-tab--active"
+                        : "source-tab"}
+                      onClick={() => setActiveEditorKind(editor.kind)}
+                    >
+                      <span>{editor.label}</span>
+                      {editor.badge && <em>{editor.badge}</em>}
+                    </button>
+                  ))}
+                </div>
+                <div className="source-editor-stack">
                 {SOURCE_EDITOR_DEFINITIONS.map((editor) => (
                   <CodeEditor
                     key={editor.kind}
                     kind={editor.kind}
                     label={editor.label}
                     badge={editor.badge}
+                    active={activeEditorKind === editor.kind}
                     value={getEditorValue(editor.kind)}
                     onChange={(value) => setEditorValue(editor.kind, value)}
-                    onFormat={() => formatCode(editor.kind)}
-                    onCopy={() => copyEditorCode(editor.kind)}
-                    onClear={() => clearEditorCode(editor.kind)}
                     onPaste={(event) => handlePaste(editor.kind, event)}
                   />
                 ))}
-              </div>
-              <div className="editor-foot">
-                <p>
-                  {getEditorHint("html")} CSS may be empty. JavaScript is optional and marked for
-                  review rather than converted into builder-native behavior.
-                </p>
-                {messages.length > 0 && (
-                  <div className="notice-list">
-                    {messages.slice(0, 2).map((message, index) => (
-                      <p key={`${message.kind}-${index}`}>
-                        <strong>{message.kind.toUpperCase()}:</strong> {message.message}
-                      </p>
-                    ))}
-                  </div>
-                )}
-              </div>
+                </div>
+                <div className="editor-foot">
+                  <p>{getEditorHint(activeEditorKind)}</p>
+                  {messages.length > 0 && (
+                    <div className="notice-list">
+                      {messages.slice(0, 2).map((message, index) => (
+                        <p key={`${message.kind}-${index}`}>
+                          <strong>{message.kind.toUpperCase()}:</strong> {message.message}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
             </section>
 
-            <section className="canvas-pane app-panel">
+            <section className={workspaceTab === "preview" ? "canvas-pane app-panel workspace-pane workspace-pane--mobile-active" : "canvas-pane app-panel workspace-pane"}>
               <div className="canvas-header">
                 <div>
                   <p className="panel__kicker">Live Preview</p>
                   <h2>{activeTemplateLabel}</h2>
                 </div>
                 <div className="canvas-options">
-                  <Toggle
-                    label="Disable Highlights"
-                    checked={!PREVIEW_HOVER_INSPECTOR_ENABLED || !highlightsEnabled}
-                    onChange={(checked) => setHighlightsEnabled(!checked)}
-                    disabled={!PREVIEW_HOVER_INSPECTOR_ENABLED}
-                  />
+                  <div className="device-control" aria-label="Preview device size">
+                    {(["desktop", "tablet", "mobile"] as const).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        className={device === item
+                          ? `device-button device-button--${item} device-button--active`
+                          : `device-button device-button--${item}`}
+                        onClick={() => setDevice(item)}
+                        aria-label={`${item} preview`}
+                      />
+                    ))}
+                  </div>
+                  <label className="width-control">
+                    <span className="sr-only">Custom preview width</span>
+                    <input
+                      type="number"
+                      min={320}
+                      max={1600}
+                      step={20}
+                      value={previewWidth}
+                      onChange={(event) =>
+                        setPreviewWidth(Number((event.currentTarget as HTMLInputElement).value) || 1280)}
+                    />
+                    <span>px</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Open preview in new window"
+                    onClick={openPreviewWindow}
+                  >
+                    ↗
+                  </button>
+                  <button type="button" className="run-button" onClick={runCode}>
+                    Run Preview
+                  </button>
                 </div>
               </div>
               <div
@@ -1034,60 +1610,68 @@ export default function JigmaBuilder() {
             </section>
           </section>
 
-          <section className="conversion-check app-panel">
-            <div className="conversion-orb" aria-hidden="true">
-              <span>{errorCount > 0 ? "x" : warningCount > 0 ? "!" : "✓"}</span>
-            </div>
-            <div className="conversion-check__body">
-              <div className="conversion-check__heading">
-                <h2>Conversion Check</h2>
-                <span className={warningCount > 0 ? "warning-badge" : "ok-badge"}>
-                  {warningCount > 0 ? `${warningCount} Warnings` : "No Warnings"}
+          <section className={showConversionDetails ? "conversion-check app-panel conversion-check--open" : "conversion-check app-panel"}>
+            <button
+              type="button"
+              className="conversion-check__summary"
+              aria-expanded={showConversionDetails}
+              onClick={() => setShowConversionDetails((current) => !current)}
+            >
+              <span className="conversion-orb" aria-hidden="true">
+                <span>{errorCount > 0 ? "x" : warningCount > 0 ? "!" : "✓"}</span>
+              </span>
+              <span className="conversion-check__body">
+                <span className="conversion-check__heading">
+                  <strong>{warningCount > 0 ? "Needs review" : "Ready to export"}</strong>
+                  <span className={warningCount > 0 ? "warning-badge" : "ok-badge"}>
+                    {warningCount > 0 ? `${warningCount} grouped issues` : "No issues"}
+                  </span>
                 </span>
-              </div>
-              {visibleConversionIssues.length > 0 ? (
-                <ul className="conversion-list">
-                  {visibleConversionIssues.map((issue, index) => (
-                    <li key={`${issue.message}-${index}`} className={`conversion-${issue.severity}`}>
-                      {issue.message}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="conversion-copy">
-                  Ready to copy and paste into Bricks.
-                </p>
-              )}
-              {showConversionDetails && (
+                <span className="conversion-copy">
+                  {bricksExport.validation.totalElements} elements · {bricksExport.validation.globalClassCount} classes · {actionRequiredCount} actions required
+                </span>
+              </span>
+              <span className="conversion-toggle" aria-hidden="true">
+                {showConversionDetails ? "Hide" : "Details"}
+              </span>
+            </button>
+            {showConversionDetails && (
+              <div className="conversion-drawer">
+                {visibleConversionIssues.slice(0, 3).length > 0 ? (
+                  <ul className="conversion-list">
+                    {visibleConversionIssues.slice(0, 3).map((issue, index) => (
+                      <li key={`${issue.id ?? issue.message}-${index}`} className={`conversion-${normalizeSeverity(issue.severity)}`}>
+                        <strong>{issue.title ?? issue.summary ?? issue.message}</strong>
+                        <span>{issue.summary ?? issue.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="conversion-copy">No warnings. Structure is ready to copy.</p>
+                )}
                 <div className="detail-grid">
                   <article>
                     <strong>Dependencies</strong>
                     <span>{dependencies.length}</span>
                   </article>
                   <article>
-                    <strong>JavaScript review</strong>
-                    <span>{preview.js.trim() ? "Required" : "None"}</span>
+                    <strong>Unsigned SVG</strong>
+                    <span>{bricksExport.validation.unsignedSvgCodeCount}</span>
                   </article>
                   <article>
-                    <strong>Export mode</strong>
-                    <span>{getExportModeLabel(options.exportMode)}</span>
+                    <strong>JavaScript review</strong>
+                    <span>{bricksExport.validation.unsignedJavaScriptCodeCount}</span>
                   </article>
                 </div>
-              )}
-            </div>
-            <div className="conversion-actions">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setShowConversionDetails((current) => !current)}
-              >
-                {showConversionDetails ? "Hide Details" : "View Details"}
-              </button>
-            </div>
+                <button type="button" className="secondary-button" onClick={showAllWarningsInInspector}>
+                  View all warnings
+                </button>
+              </div>
+            )}
           </section>
         </main>
 
-        <aside className="right-sidebar app-panel">
+        <aside className={(workspaceTab === "inspect" || workspaceTab === "export") ? "right-sidebar app-panel workspace-pane workspace-pane--mobile-active" : "right-sidebar app-panel workspace-pane"}>
           <div className="workflow-tabs" role="tablist" aria-label="Conversion workflow">
             {workflowTabs.map((tab) => (
               <button
@@ -1157,17 +1741,24 @@ export default function JigmaBuilder() {
                 <p className="empty-state">No external dependencies detected.</p>
               ) : (
                 <div className="dependency-list">
-                  {dependencies.map((dependency) => (
-                    <article className="dependency-item" key={dependency.id}>
-                      <div>
-                        <span className={`dependency-type dependency-type--${dependency.type}`}>
-                          {dependency.type}
-                        </span>
-                        <h3>{dependency.label}</h3>
-                        <p>{dependency.value}</p>
-                      </div>
-                      {dependency.warning && <p className="dependency-warning">{dependency.warning}</p>}
-                    </article>
+                  {dependencyGroups.map((group) => (
+                    <section className="dependency-group" key={group.label}>
+                      <header>
+                        <h3>{group.label}</h3>
+                        <span>{group.items.length}</span>
+                      </header>
+                      {group.items.map((dependency) => (
+                        <article className="dependency-item" key={dependency.id}>
+                          <div>
+                            <span className={`dependency-type dependency-type--${dependency.type}`}>
+                              {dependency.required ? "External dependency" : "Optional"}
+                            </span>
+                            <h4>{dependency.label}</h4>
+                            <p>{dependency.warning ? "Review before export" : "Available for mapping"}</p>
+                          </div>
+                        </article>
+                      ))}
+                    </section>
                   ))}
                 </div>
               )}
@@ -1179,19 +1770,82 @@ export default function JigmaBuilder() {
               <div className="sidebar-heading">
                 <div>
                   <p className="panel__kicker">Warnings</p>
-                  <h2>{warningCount} issue{warningCount === 1 ? "" : "s"}</h2>
+                  <h2>{warningCount} grouped issue{warningCount === 1 ? "" : "s"}</h2>
                 </div>
               </div>
-              {conversionIssues.length === 0 ? (
+              {groupedConversionIssues.length === 0 ? (
                 <p className="empty-state">No warnings. Structure is ready to copy.</p>
               ) : (
-                <ul className="warning-list">
-                  {conversionIssues.map((issue, index) => (
-                    <li key={`${issue.message}-${index}`} className={`conversion-${issue.severity}`}>
-                      {issue.message}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <div className="warning-filter-grid" aria-label="Warning filters">
+                    {WARNING_FILTERS.map((filter) => {
+                      const count = filter.id === "all"
+                        ? warningCount
+                        : severityCounts[filter.id];
+                      return (
+                        <button
+                          key={filter.id}
+                          type="button"
+                          className={warningFilter === filter.id
+                            ? "warning-filter warning-filter--active"
+                            : "warning-filter"}
+                          onClick={() => {
+                            setWarningFilter(filter.id);
+                            setShowAllWarnings(false);
+                          }}
+                        >
+                          <span>{filter.label}</span>
+                          <strong>{count}</strong>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {filteredWarningGroups.length === 0 ? (
+                    <p className="empty-state">No issues match this filter.</p>
+                  ) : (
+                    <ul className="warning-list">
+                      {visibleWarningGroups.map((issue, index) => {
+                        const severity = normalizeSeverity(issue.severity);
+                        return (
+                          <li key={`${issue.id ?? issue.message}-${index}`} className={`conversion-${severity}`}>
+                            <details>
+                              <summary>
+                                <span>
+                                  <strong>{issue.title ?? issue.summary ?? issue.message}</strong>
+                                  <small>
+                                    {issue.ownerLabel ? `${issue.ownerLabel} - ` : ""}
+                                    {issue.summary ?? issue.message}
+                                  </small>
+                                </span>
+                                {(issue.count ?? 1) > 1 && <em>{issue.count}x</em>}
+                              </summary>
+                              {(issue.details?.length || issue.suggestedAction) && (
+                                <div className="warning-details">
+                                  {issue.details?.map((detail) => <p key={detail}>{detail}</p>)}
+                                  {issue.suggestedAction && <p><strong>Action:</strong> {issue.suggestedAction}</p>}
+                                </div>
+                              )}
+                            </details>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  {filteredWarningGroups.length > 5 && (
+                    <button
+                      type="button"
+                      className="secondary-button secondary-button--wide"
+                      onClick={() => setShowAllWarnings((current) => !current)}
+                    >
+                      {showAllWarnings ? "Show first 5" : `Show all ${filteredWarningGroups.length}`}
+                    </button>
+                  )}
+                  {totalIssueCount > warningCount && (
+                    <p className="warning-total">
+                      {totalIssueCount} total notices collapsed into {warningCount} grouped issue{warningCount === 1 ? "" : "s"}.
+                    </p>
+                  )}
+                </>
               )}
             </section>
           )}
@@ -1200,39 +1854,25 @@ export default function JigmaBuilder() {
             <section className="workflow-panel export-settings">
             <div className="sidebar-heading">
               <div>
-                <p className="panel__kicker">Export Settings</p>
-                <h2>Output Format</h2>
+                <p className="panel__kicker">Export</p>
+                <h2>Copy structure</h2>
               </div>
-              <span className="mode-pill">{getExportModeLabel(options.exportMode)}</span>
+              <span className="mode-pill">{outputAdapter.formatLabel}</span>
             </div>
 
-            <label className="field-group field-group--inline">
-              <span>Output Format</span>
-              <select value={outputAdapter.format} onChange={() => undefined}>
-                <option value={outputAdapter.format}>{outputAdapter.formatLabel}</option>
-              </select>
-              <small>More output formats later.</small>
-            </label>
-
-            <label className="field-group field-group--inline">
-              <span>Export mode</span>
-              <select
-                value={options.exportMode === "structure-only" ? "structure-only" : "element-styles"}
-                onChange={(event) =>
-                  setExportMode((event.currentTarget as HTMLSelectElement).value as ExportMode)}
-              >
-                <option value="element-styles">Element styles</option>
-                <option value="structure-only">Structure only</option>
-              </select>
-            </label>
-
-            <section className="attachment-card">
-              <p>Class attachment</p>
-              <span className="attachment-value">Element classes</span>
-              <small>
-                Element styles attaches BEM classes to each Bricks element and writes matching CSS
-                into that element using Bricks' %root% custom CSS pattern.
-              </small>
+            <section className="export-static-grid" aria-label="Export architecture">
+              <article>
+                <span>Output format</span>
+                <strong>{outputAdapter.formatLabel}</strong>
+              </article>
+              <article>
+                <span>Export architecture</span>
+                <strong>Native Bricks Classes</strong>
+              </article>
+              <article>
+                <span>Naming</span>
+                <strong>{options.classMode === "strict-bem" ? "Strict BEM" : "Hybrid BEM"}</strong>
+              </article>
             </section>
 
             <dl className="export-summary">
@@ -1241,23 +1881,23 @@ export default function JigmaBuilder() {
                 <dd>{bricksExport.validation.totalElements}</dd>
               </div>
               <div>
-                <dt>BEM classes</dt>
-                <dd>{bricksExport.validation.bemClassCount}</dd>
-              </div>
-              <div>
-                <dt>Global classes</dt>
+                <dt>Native classes</dt>
                 <dd>{bricksExport.validation.globalClassCount}</dd>
               </div>
               <div>
-                <dt>CSS scoped</dt>
-                <dd>
-                  {options.exportMode === "scoped-css-block"
-                    ? bricksExport.validation.cssScopedRuleCount
-                    : bricksExport.validation.cssAttachedRuleCount}
-                </dd>
+                <dt>Native properties mapped</dt>
+                <dd>{bricksExport.validation.nativeStyleMappedCount}</dd>
               </div>
               <div>
-                <dt>Warnings</dt>
+                <dt>CSS class fallbacks</dt>
+                <dd>{bricksExport.validation.customCssFallbackCount}</dd>
+              </div>
+              <div>
+                <dt>Dependencies</dt>
+                <dd>{bricksExport.validation.externalDependencyCount}</dd>
+              </div>
+              <div>
+                <dt>Issues requiring review</dt>
                 <dd>{warningCount}</dd>
               </div>
               <div>
@@ -1266,31 +1906,44 @@ export default function JigmaBuilder() {
               </div>
             </dl>
 
+            <button type="button" className="copy-button copy-button--wide" onClick={copyBricksStructure}>
+              {outputAdapter.copyLabel}
+            </button>
+            <div className="export-actions">
+              <button type="button" className="secondary-button" onClick={downloadBricksJson}>
+                Download JSON
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowJson((current) => !current)}
+              >
+                {showJson ? "Hide generated JSON" : "View generated JSON"}
+              </button>
+            </div>
+            {showJson && <pre className="json-output json-output--inline">{bricksJson}</pre>}
+
             <details
               className="advanced-export"
               open={showAdvancedExport}
               onToggle={(event) =>
                 setShowAdvancedExport((event.currentTarget as HTMLDetailsElement).open)}
             >
-              <summary>Advanced export settings</summary>
+              <summary>Advanced output</summary>
               <div className="toggle-stack">
                 <Toggle
-                  label="Strict BEM"
-                  checked={options.classMode === "strict-bem"}
+                  label="Minify fallback CSS"
+                  checked={options.minifyElementCss}
                   onChange={(checked) =>
-                    setOption("classMode", checked ? "strict-bem" : "hybrid" as ClassMode)}
+                    setOption("minifyElementCss", checked)}
+                  note="Optional compact fallback CSS. Readable CSS remains the default."
                 />
                 <Toggle
-                  label="Scoped CSS"
-                  checked={options.exportMode === "scoped-css-block"}
-                  onChange={(checked) => setExportMode(checked ? "scoped-css-block" : "element-styles")}
-                  note="Advanced fallback for a generated CSS block."
-                />
-                <Toggle
-                  label="Global classes"
-                  checked={options.exportMode === "global-classes"}
-                  onChange={(checked) => setExportMode(checked ? "global-classes" : "element-styles")}
-                  note="Create Bricks global class entries only when needed."
+                  label="Preserve external utility classes"
+                  checked={options.classMode !== "strict-bem"}
+                  onChange={(checked) =>
+                    setOption("classMode", checked ? "hybrid" as ClassMode : "strict-bem")}
+                  note="Keeps safe original classes alongside generated BEM."
                 />
                 <Toggle
                   label="Include external CSS"
@@ -1298,37 +1951,32 @@ export default function JigmaBuilder() {
                   onChange={(checked) => setOption("includeExternalCss", checked)}
                 />
                 <Toggle
-                  label="Include external JS"
-                  checked={options.includeExternalScripts}
-                  onChange={(checked) => setOption("includeExternalScripts", checked)}
-                  note="Review custom code before using it in Bricks."
-                />
-                <Toggle
-                  label="Minify element CSS"
-                  checked={options.minifyElementCss}
-                  onChange={(checked) => setOption("minifyElementCss", checked)}
-                  note="Optional compact %root% CSS. Readable CSS remains the default."
+                  label="Include JavaScript as unsigned Code element"
+                  checked={false}
+                  onChange={() => undefined}
+                  disabled
+                  note="Disabled for MVP. JavaScript stays review-required."
                 />
               </div>
+              <section className="advanced-output-block">
+                <p>Diagnostic class audit</p>
+                <small>Class reference validation: {bricksExport.validation.classReferenceValid ? "Passed" : "Needs review"}</small>
+              </section>
             </details>
-
-            <button type="button" className="copy-button copy-button--wide" onClick={copyBricksStructure}>
-              {outputAdapter.copyLabel}
-            </button>
-            <button
-              type="button"
-              className="secondary-button secondary-button--wide"
-              onClick={() => setShowJson((current) => !current)}
-            >
-              {showJson ? "Hide generated JSON" : "View generated JSON"}
-            </button>
-            {showJson && <pre className="json-output">{bricksJson}</pre>}
 
             <p className="status-line">{status}</p>
             </section>
           )}
         </aside>
       </section>
+      <div className="mobile-action-bar" aria-label="Primary actions">
+        <button type="button" className="run-button" onClick={runCode}>
+          Run Preview
+        </button>
+        <button type="button" className="copy-button" onClick={copyBricksStructure}>
+          Copy Structure
+        </button>
+      </div>
     </section>
   );
 }

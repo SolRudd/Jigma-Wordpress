@@ -1,4 +1,5 @@
 import type { LayerNode, ParsedElement } from "../../types/jigma.ts";
+import { sanitizeSvgMarkup } from "../svg/sanitize.ts";
 
 const VOID_TAGS = new Set([
   "area",
@@ -67,6 +68,27 @@ function createElement(tagName: string, rawAttributes: string, selfClosing: bool
     textSegments: [],
     selfClosing,
   };
+}
+
+function findSvgCloseIndex(html: string, fromIndex: number) {
+  const pattern = /<\/?svg\b[^>]*>/gi;
+  pattern.lastIndex = fromIndex;
+  let depth = 1;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(html)) !== null) {
+    const token = match[0];
+    if (/^<\s*svg\b/i.test(token) && !/\/\s*>$/.test(token)) {
+      depth += 1;
+    } else if (/^<\s*\/\s*svg\b/i.test(token)) {
+      depth -= 1;
+      if (depth === 0) {
+        return pattern.lastIndex;
+      }
+    }
+  }
+
+  return -1;
 }
 
 export function parseHtmlFragment(html: string) {
@@ -144,6 +166,23 @@ export function parseHtmlFragment(html: string) {
     const selfClosing = /\/\s*$/.test(rawTag) || VOID_TAGS.has(tagName);
     const element = createElement(tagName, rawAttributes, selfClosing);
     stack.at(-1)?.children.push(element);
+
+    if (tagName === "svg") {
+      if (selfClosing) {
+        element.rawHtml = html.slice(tagStart, tagEnd + 1);
+        continue;
+      }
+
+      const svgCloseIndex = findSvgCloseIndex(html, index);
+      if (svgCloseIndex === -1) {
+        element.rawHtml = html.slice(tagStart, tagEnd + 1);
+        warnings.push("HTML contains an unfinished inline SVG.");
+      } else {
+        element.rawHtml = html.slice(tagStart, svgCloseIndex);
+        index = svgCloseIndex;
+      }
+      continue;
+    }
 
     if (tagName === "script" || tagName === "style") {
       const closePattern = new RegExp(`</${tagName}\\s*>`, "i");
@@ -321,6 +360,22 @@ export function serializeElement(
     .map(([name, value]) => value === "" ? name : `${name}="${escapeHtml(value)}"`)
     .join(" ");
   const openTag = attributeText ? `<${element.tagName} ${attributeText}>` : `<${element.tagName}>`;
+
+  if (element.tagName === "svg" && element.rawHtml) {
+    const sanitized = sanitizeSvgMarkup(element.rawHtml);
+    if (!sanitized.svg) {
+      return `<span data-jigma-svg-error="true" style="display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;border:1px solid currentColor;border-radius:8px;color:#ef4444;font:12px/1.3 system-ui;">SVG review required</span>`;
+    }
+
+    if (!options.addLayerAttributes) {
+      return sanitized.svg;
+    }
+
+    return sanitized.svg.replace(
+      /^<svg\b/i,
+      `<svg data-jigma-layer="${escapeHtml(options.path)}"${options.activeLayerId === options.path ? ' data-jigma-active="true"' : ""}`,
+    );
+  }
 
   if (VOID_TAGS.has(element.tagName) || element.selfClosing) {
     return attributeText ? `<${element.tagName} ${attributeText}>` : `<${element.tagName}>`;

@@ -7,6 +7,7 @@ export type StylingMode = "bem-css" | "native-experimental";
 export type ClassMode = "strict-bem" | "hybrid" | "preserve";
 
 export type ExportMode =
+  | "native-bem-classes"
   | "element-styles"
   | "structure-only"
   | "scoped-css-block"
@@ -30,6 +31,7 @@ export interface ParsedElement {
   children: ParsedElement[];
   textSegments: string[];
   selfClosing: boolean;
+  rawHtml?: string;
 }
 
 export interface LayerNode {
@@ -68,9 +70,20 @@ export interface DependencyItem {
   warning?: string;
 }
 
+export type ConversionSeverity = "notice" | "info" | "warning" | "action-required" | "error";
+
 export interface ConversionWarning {
-  severity: "info" | "warning" | "error";
+  severity: ConversionSeverity;
   message: string;
+  id?: string;
+  code?: string;
+  title?: string;
+  summary?: string;
+  count?: number;
+  ownerElementId?: string;
+  ownerLabel?: string;
+  details?: string[];
+  suggestedAction?: string;
 }
 
 export interface BricksElement {
@@ -86,7 +99,6 @@ export interface BricksGlobalClass {
   id: string;
   name: string;
   settings: Record<string, unknown>;
-  _exists: false;
 }
 
 export interface BricksExportValidation {
@@ -107,8 +119,31 @@ export interface BricksExportValidation {
   unusedSelectorCount: number;
   nativeStyleMappedCount: number;
   customCssFallbackCount: number;
+  blockScopedFallbackCount: number;
+  responsiveRuleCount: number;
+  pseudoRuleCount: number;
+  unresolvedSelectorCount: number;
+  externalDependencyCount: number;
+  unsignedSvgCodeCount: number;
+  unsignedJavaScriptCodeCount: number;
+  groupedWarningCount: number;
+  classReferenceValid: boolean;
+  missingClassReferenceCount: number;
+  duplicateClassIdCount: number;
+  duplicateClassNameCount: number;
+  emptyStyledClassCount: number;
   dependencyWarningCount: number;
   jsWarningCount: number;
+}
+
+export interface BricksClassAuditEntry {
+  className: string;
+  classId: string;
+  assignedElementIds: string[];
+  nativeSettingsCount: number;
+  customCssPresent: boolean;
+  missingReferences: string[];
+  conflicts: string[];
 }
 
 export interface BricksExport {
@@ -122,6 +157,7 @@ export interface BricksExport {
     targetBricksVersion: string;
     stylingMode: StylingMode;
     notes: string[];
+    classAudit?: BricksClassAuditEntry[];
   };
   warnings: ConversionWarning[];
   validation: BricksExportValidation;

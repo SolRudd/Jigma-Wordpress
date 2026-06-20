@@ -24,6 +24,10 @@ function isExternalUrl(value: string) {
   return /^(https?:)?\/\//i.test(value);
 }
 
+function isSvgUrl(value: string) {
+  return /\.svg(?:[?#]|$)/i.test(value);
+}
+
 function getHostLabel(value: string) {
   try {
     const url = value.startsWith("//") ? new URL(`https:${value}`) : new URL(value);
@@ -49,6 +53,28 @@ function detectLibrary(value: string) {
   return libraries.find((library) => library.pattern.test(normalized))?.label;
 }
 
+function inspectSvgUseReferences(html: string, items: DependencyItem[]) {
+  const usePattern = /<use\b[^>]*\s(?:href|xlink:href)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = usePattern.exec(html)) !== null) {
+    const value = match[1] ?? match[2] ?? match[3] ?? "";
+    if (!value || value.startsWith("#")) {
+      continue;
+    }
+
+    pushUnique(items, {
+      type: "svg",
+      label: isSvgUrl(value) ? `SVG sprite reference: ${getHostLabel(value)}` : "SVG external reference",
+      value,
+      source: "html",
+      required: true,
+      includable: false,
+      warning: "SVG sprite references are preserved but must be available in the final Bricks site.",
+    });
+  }
+}
+
 function walkElements(
   element: ReturnType<typeof getRenderableRoots>["roots"][number],
   callback: (element: ReturnType<typeof getRenderableRoots>["roots"][number]) => void,
@@ -60,6 +86,8 @@ function walkElements(
 export function inspectDependencies(html: string, css: string, js: string) {
   const items: DependencyItem[] = [];
   const parsed = parseHtmlFragment(html);
+
+  inspectSvgUseReferences(html, items);
 
   parsed.root.children.forEach((root) => {
     walkElements(root, (element) => {
@@ -96,13 +124,17 @@ export function inspectDependencies(html: string, css: string, js: string) {
       }
 
       if (element.tagName === "img" && element.attributes.src) {
+        const src = element.attributes.src;
         pushUnique(items, {
-          type: "image",
-          label: `Image URL: ${getHostLabel(element.attributes.src)}`,
-          value: element.attributes.src,
+          type: isSvgUrl(src) ? "svg" : "image",
+          label: isSvgUrl(src) ? `SVG image URL: ${getHostLabel(src)}` : `Image URL: ${getHostLabel(src)}`,
+          value: src,
           source: "html",
           required: true,
           includable: false,
+          warning: isSvgUrl(src)
+            ? "SVG file URLs are listed as dependencies and are not fetched or inlined by Jigma."
+            : undefined,
         });
       }
 
@@ -113,7 +145,7 @@ export function inspectDependencies(html: string, css: string, js: string) {
           value: element.attributes.id ? `#${element.attributes.id}` : "inline-svg",
           source: "html",
           required: true,
-          includable: true,
+          includable: false,
           warning: "SVG code may need manual signing or review in Bricks before rendering.",
         });
       }
@@ -157,8 +189,8 @@ export function inspectDependencies(html: string, css: string, js: string) {
     }
 
     pushUnique(items, {
-      type: /\.svg(?:[?#]|$)/i.test(value) ? "svg" : "image",
-      label: /\.svg(?:[?#]|$)/i.test(value) ? `SVG URL: ${getHostLabel(value)}` : `CSS asset: ${getHostLabel(value)}`,
+      type: isSvgUrl(value) ? "svg" : "image",
+      label: isSvgUrl(value) ? `SVG URL: ${getHostLabel(value)}` : `CSS asset: ${getHostLabel(value)}`,
       value,
       source: "css",
       required: true,
@@ -176,6 +208,23 @@ export function inspectDependencies(html: string, css: string, js: string) {
       source: "css",
       required: false,
       includable: true,
+    });
+  }
+
+  const fontFacePattern = /@font-face\s*\{([\s\S]*?)\}/gi;
+  let fontFaceMatch: RegExpExecArray | null;
+  while ((fontFaceMatch = fontFacePattern.exec(css)) !== null) {
+    const body = fontFaceMatch[1];
+    const family = body.match(/font-family\s*:\s*["']?([^;"'}]+)["']?/i)?.[1]?.trim() ??
+      "custom font";
+    pushUnique(items, {
+      type: "font",
+      label: `Font face: ${family}`,
+      value: family,
+      source: "css",
+      required: true,
+      includable: true,
+      warning: "@font-face requires manual review before adding it to the final Bricks site.",
     });
   }
 

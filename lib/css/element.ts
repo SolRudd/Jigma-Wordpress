@@ -1,5 +1,7 @@
-import type { BricksElement, ConversionWarning } from "../../types/jigma.ts";
+import type { BricksElement, BricksGlobalClass, ConversionWarning } from "../../types/jigma.ts";
 
+// Bricks element custom CSS clipboard field. Keep isolated so manual paste testing
+// can swap this key if a Bricks schema change proves a different field is honored.
 export const BRICKS_ELEMENT_CUSTOM_CSS_FIELD = "_cssCustom";
 
 export interface ElementCssTarget {
@@ -9,11 +11,25 @@ export interface ElementCssTarget {
   sourceId?: string;
 }
 
+export interface ClassCssTarget {
+  globalClass: BricksGlobalClass;
+  className: string;
+  sourceClasses: string[];
+  sourceId?: string;
+}
+
 export interface ElementCssResult {
   warnings: ConversionWarning[];
   attachedRuleCount: number;
   unmappedRuleCount: number;
   pseudoSelectorCount: number;
+  nativeStyleMappedCount: number;
+  customCssFallbackCount: number;
+  blockScopedFallbackCount: number;
+  responsiveRuleCount: number;
+  pseudoRuleCount: number;
+  unresolvedSelectorCount: number;
+  styledClassIds: Set<string>;
 }
 
 export interface ElementCssOptions {
@@ -28,6 +44,19 @@ interface CssBlock {
 interface ElementCssBucket {
   root: Map<string, string[]>;
   media: Map<string, Map<string, string[]>>;
+  raw: string[];
+}
+
+interface ClassCssBucket {
+  root: Map<string, string[]>;
+  media: Map<string, Map<string, string[]>>;
+  raw: string[];
+}
+
+interface CssDeclaration {
+  property: string;
+  value: string;
+  important: boolean;
 }
 
 function pushWarning(
@@ -87,12 +116,7 @@ function parseTopLevelBlocks(css: string) {
 }
 
 function formatDeclarations(body: string) {
-  return body
-    .split(";")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.endsWith(";") ? line : `${line};`)
-    .join("\n");
+  return parseDeclarations(body).map(formatDeclaration).join("\n");
 }
 
 function minifyDeclarations(declarations: string) {
@@ -140,11 +164,506 @@ export function attachElementCss(element: BricksElement, css: string) {
   const nextCss = existing ? `${existing}\n\n${css}` : css;
 
   element.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] = nextCss;
-  element.settings._jigmaElementCss = nextCss;
 }
 
 function unique<T>(items: T[]) {
   return Array.from(new Set(items));
+}
+
+function splitCssList(value: string, separator = /\s+/) {
+  const parts: string[] = [];
+  let current = "";
+  let quote = "";
+  let depth = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    const previous = value[index - 1];
+
+    if (quote) {
+      current += char;
+      if (char === quote && previous !== "\\") {
+        quote = "";
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    if (char === "(") {
+      depth += 1;
+      current += char;
+      continue;
+    }
+
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      current += char;
+      continue;
+    }
+
+    if (depth === 0 && separator.test(char)) {
+      if (current.trim()) {
+        parts.push(current.trim());
+      }
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    parts.push(current.trim());
+  }
+
+  return parts;
+}
+
+function parseDeclarations(body: string): CssDeclaration[] {
+  const rawDeclarations: string[] = [];
+  let current = "";
+  let quote = "";
+  let depth = 0;
+
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    const previous = body[index - 1];
+
+    if (quote) {
+      current += char;
+      if (char === quote && previous !== "\\") {
+        quote = "";
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    if (char === "(") {
+      depth += 1;
+      current += char;
+      continue;
+    }
+
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      current += char;
+      continue;
+    }
+
+    if (char === ";" && depth === 0) {
+      if (current.trim()) {
+        rawDeclarations.push(current.trim());
+      }
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    rawDeclarations.push(current.trim());
+  }
+
+  return rawDeclarations.map((declaration) => {
+    const colonIndex = declaration.indexOf(":");
+    if (colonIndex === -1) {
+      return null;
+    }
+
+    const property = declaration.slice(0, colonIndex).trim().toLowerCase();
+    const rawValue = declaration.slice(colonIndex + 1).trim();
+    const important = /!\s*important$/i.test(rawValue);
+    const value = rawValue.replace(/!\s*important$/i, "").trim();
+
+    if (!property || !value) {
+      return null;
+    }
+
+    return { property, value, important };
+  }).filter((declaration): declaration is CssDeclaration => Boolean(declaration));
+}
+
+function formatDeclaration(declaration: CssDeclaration) {
+  return `${declaration.property}: ${declaration.value}${declaration.important ? " !important" : ""};`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getSettingsObject(settings: Record<string, unknown>, key: string) {
+  const existing = settings[key];
+  if (isPlainObject(existing)) {
+    return existing;
+  }
+
+  const next: Record<string, unknown> = {};
+  settings[key] = next;
+  return next;
+}
+
+function mergeObjectSetting(
+  settings: Record<string, unknown>,
+  key: string,
+  value: Record<string, unknown>,
+) {
+  settings[key] = {
+    ...getSettingsObject(settings, key),
+    ...value,
+  };
+}
+
+function makeColorValue(value: string) {
+  return { raw: value };
+}
+
+function isSimpleColorValue(value: string) {
+  const lowerValue = value.trim().toLowerCase();
+  return !/(gradient|url)\s*\(/i.test(lowerValue) &&
+    (
+      /^#([0-9a-f]{3,8})$/i.test(lowerValue) ||
+      /^(rgb|rgba|hsl|hsla|color|color-mix|var)\(/i.test(lowerValue) ||
+      /^(currentcolor|transparent|inherit|initial|unset|[a-z]+)$/.test(lowerValue)
+    );
+}
+
+function spacingFromShorthand(value: string) {
+  const parts = splitCssList(value);
+  const [top, right = top, bottom = top, left = right] = parts;
+
+  return {
+    top,
+    right,
+    bottom,
+    left,
+  };
+}
+
+function mergeSpacingSide(
+  settings: Record<string, unknown>,
+  key: string,
+  side: "top" | "right" | "bottom" | "left",
+  value: string,
+) {
+  mergeObjectSetting(settings, key, { [side]: value });
+}
+
+function makeSettingKey(baseKey: string, breakpoint?: string, state?: string) {
+  return [baseKey, breakpoint, state].filter(Boolean).join(":");
+}
+
+function getBreakpointFromMedia(mediaSelector?: string) {
+  if (!mediaSelector) {
+    return undefined;
+  }
+
+  const maxWidth = mediaSelector.match(/max-width\s*:\s*(\d+(?:\.\d+)?)px/i);
+  if (!maxWidth) {
+    return undefined;
+  }
+
+  const value = Number(maxWidth[1]);
+  if (Number.isNaN(value)) {
+    return undefined;
+  }
+
+  if (value <= 478) {
+    return "mobile_portrait";
+  }
+
+  if (value <= 767) {
+    return "mobile_landscape";
+  }
+
+  return "tablet_portrait";
+}
+
+function getStateFromPseudo(rootSuffix: string) {
+  const normalized = rootSuffix.replace(/^:/, "").trim();
+  return ["hover", "focus", "focus-visible", "active"].includes(normalized)
+    ? normalized
+    : undefined;
+}
+
+function parseBorderValue(value: string) {
+  const styleWords = new Set([
+    "none",
+    "solid",
+    "dashed",
+    "dotted",
+    "double",
+    "groove",
+    "ridge",
+    "inset",
+    "outset",
+  ]);
+  const parts = splitCssList(value);
+  const styleIndex = parts.findIndex((part) => styleWords.has(part.toLowerCase()));
+  if (styleIndex === -1) {
+    return null;
+  }
+
+  const width = parts.slice(0, styleIndex).join(" ").trim();
+  const style = parts[styleIndex];
+  const color = parts.slice(styleIndex + 1).join(" ").trim();
+
+  return {
+    ...(width ? { width: spacingFromShorthand(width) } : {}),
+    style,
+    ...(color ? { color: makeColorValue(color) } : {}),
+  };
+}
+
+function mergeBorderSetting(
+  settings: Record<string, unknown>,
+  key: string,
+  value: Record<string, unknown>,
+) {
+  mergeObjectSetting(settings, key, value);
+}
+
+function applyNativeSetting(
+  settings: Record<string, unknown>,
+  declaration: CssDeclaration,
+  breakpoint?: string,
+  state?: string,
+) {
+  if (declaration.important) {
+    return false;
+  }
+
+  const key = (baseKey: string) => makeSettingKey(baseKey, breakpoint, state);
+  const property = declaration.property;
+  const value = declaration.value;
+
+  if (property === "display") {
+    settings[key("_display")] = value;
+    return true;
+  }
+
+  if (property === "flex-direction") {
+    settings[key("_direction")] = value;
+    return true;
+  }
+
+  if (property === "flex-wrap") {
+    settings[key("_flexWrap")] = value;
+    return true;
+  }
+
+  if (property === "align-items") {
+    settings[key("_alignItems")] = value;
+    return true;
+  }
+
+  if (property === "justify-content") {
+    settings[key("_justifyContent")] = value;
+    return true;
+  }
+
+  if (property === "grid-template-columns") {
+    settings[key("_gridTemplateColumns")] = value;
+    return true;
+  }
+
+  if (property === "grid-template-rows") {
+    settings[key("_gridTemplateRows")] = value;
+    return true;
+  }
+
+  if (property === "gap") {
+    settings[key("_gap")] = value;
+    return true;
+  }
+
+  if (property === "row-gap") {
+    settings[key("_rowGap")] = value;
+    return true;
+  }
+
+  if (property === "column-gap") {
+    settings[key("_columnGap")] = value;
+    return true;
+  }
+
+  if (property === "grid-gap") {
+    settings[key("_gridGap")] = value;
+    return true;
+  }
+
+  if (property === "width") {
+    settings[key("_width")] = value;
+    return true;
+  }
+
+  if (property === "min-width") {
+    settings[key("_widthMin")] = value;
+    return true;
+  }
+
+  if (property === "max-width") {
+    settings[key("_widthMax")] = value;
+    return true;
+  }
+
+  if (property === "height") {
+    settings[key("_height")] = value;
+    return true;
+  }
+
+  if (property === "min-height") {
+    settings[key("_heightMin")] = value;
+    return true;
+  }
+
+  if (property === "max-height") {
+    settings[key("_heightMax")] = value;
+    return true;
+  }
+
+  if (property === "position") {
+    settings[key("_position")] = value;
+    return true;
+  }
+
+  if (property === "overflow") {
+    settings[key("_overflow")] = value;
+    return true;
+  }
+
+  if (property === "overflow-x") {
+    settings[key("_overflowX")] = value;
+    return true;
+  }
+
+  if (property === "overflow-y") {
+    settings[key("_overflowY")] = value;
+    return true;
+  }
+
+  if (property === "inset") {
+    mergeObjectSetting(settings, key("_inset"), spacingFromShorthand(value));
+    return true;
+  }
+
+  const insetSide = property.match(/^(top|right|bottom|left)$/);
+  if (insetSide) {
+    mergeSpacingSide(settings, key("_inset"), insetSide[1] as "top" | "right" | "bottom" | "left", value);
+    return true;
+  }
+
+  if (property === "margin") {
+    mergeObjectSetting(settings, key("_margin"), spacingFromShorthand(value));
+    return true;
+  }
+
+  if (property === "padding") {
+    mergeObjectSetting(settings, key("_padding"), spacingFromShorthand(value));
+    return true;
+  }
+
+  const marginSide = property.match(/^margin-(top|right|bottom|left)$/);
+  if (marginSide) {
+    mergeSpacingSide(settings, key("_margin"), marginSide[1] as "top" | "right" | "bottom" | "left", value);
+    return true;
+  }
+
+  const paddingSide = property.match(/^padding-(top|right|bottom|left)$/);
+  if (paddingSide) {
+    mergeSpacingSide(settings, key("_padding"), paddingSide[1] as "top" | "right" | "bottom" | "left", value);
+    return true;
+  }
+
+  const typographyPropertyMap = new Set([
+    "font-family",
+    "font-size",
+    "font-weight",
+    "font-style",
+    "line-height",
+    "letter-spacing",
+    "text-align",
+    "text-transform",
+    "text-decoration",
+  ]);
+  if (typographyPropertyMap.has(property)) {
+    mergeObjectSetting(settings, key("_typography"), { [property]: value });
+    return true;
+  }
+
+  if (property === "color") {
+    mergeObjectSetting(settings, key("_typography"), { color: makeColorValue(value) });
+    return true;
+  }
+
+  if (property === "background-color") {
+    mergeObjectSetting(settings, key("_background"), { color: makeColorValue(value) });
+    return true;
+  }
+
+  if (property === "background" && isSimpleColorValue(value)) {
+    mergeObjectSetting(settings, key("_background"), { color: makeColorValue(value) });
+    return true;
+  }
+
+  if (property === "border") {
+    const border = parseBorderValue(value);
+    if (!border) {
+      return false;
+    }
+
+    mergeBorderSetting(settings, key("_border"), border);
+    return true;
+  }
+
+  if (property === "border-width") {
+    mergeBorderSetting(settings, key("_border"), { width: spacingFromShorthand(value) });
+    return true;
+  }
+
+  if (property === "border-style") {
+    mergeBorderSetting(settings, key("_border"), { style: value });
+    return true;
+  }
+
+  if (property === "border-color") {
+    mergeBorderSetting(settings, key("_border"), { color: makeColorValue(value) });
+    return true;
+  }
+
+  if (property === "border-radius") {
+    mergeBorderSetting(settings, key("_border"), { radius: spacingFromShorthand(value) });
+    return true;
+  }
+
+  if (property === "box-shadow") {
+    settings[key("_boxShadow")] = { values: [value] };
+    return true;
+  }
+
+  if (property === "opacity") {
+    settings[key("_opacity")] = value;
+    return true;
+  }
+
+  return false;
+}
+
+function countNativeSettings(settings: Record<string, unknown>) {
+  return Object.keys(settings).filter((key) =>
+    key !== BRICKS_ELEMENT_CUSTOM_CSS_FIELD &&
+    key.startsWith("_")
+  ).length;
 }
 
 function getBemAliases(bemClass: string) {
@@ -287,6 +806,204 @@ function addMapEntry(
   map.set(key, existing);
 }
 
+function addClassMapEntry(
+  map: Map<string, Set<ClassCssTarget>>,
+  key: string | undefined,
+  target: ClassCssTarget,
+) {
+  if (!key) {
+    return;
+  }
+
+  const existing = map.get(key) ?? new Set<ClassCssTarget>();
+  existing.add(target);
+  map.set(key, existing);
+}
+
+function resolveClassSelectorTargets(
+  selector: string,
+  classMap: Map<string, Set<ClassCssTarget>>,
+  idMap: Map<string, Set<ClassCssTarget>>,
+) {
+  const parts = getSelectorParts(selector);
+  const missingNames: string[] = [];
+  const matchedByClass = parts.classes.map((className) => ({
+    className,
+    matches: classMap.get(className),
+  }));
+  const matchedById = parts.ids.map((id) => ({
+    id,
+    matches: idMap.get(id),
+  }));
+
+  matchedByClass.forEach((entry) => {
+    if (!entry.matches) {
+      missingNames.push(`.${entry.className}`);
+    }
+  });
+  matchedById.forEach((entry) => {
+    if (!entry.matches) {
+      missingNames.push(`#${entry.id}`);
+    }
+  });
+
+  const classTarget = [...matchedByClass].reverse().find((entry) => entry.matches);
+  if (classTarget?.matches) {
+    return {
+      targets: classTarget.matches,
+      missingNames,
+      hasTargetableSelector: true,
+    };
+  }
+
+  const idTarget = matchedById.find((entry) => entry.matches);
+  if (idTarget?.matches) {
+    return {
+      targets: idTarget.matches,
+      missingNames,
+      hasTargetableSelector: true,
+    };
+  }
+
+  return {
+    targets: new Set<ClassCssTarget>(),
+    missingNames,
+    hasTargetableSelector: parts.classes.length > 0 || parts.ids.length > 0,
+  };
+}
+
+function getSelectorClassTokens(selector: string) {
+  const tokens: { className: string; index: number }[] = [];
+  const classPattern = /\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = classPattern.exec(selector)) !== null) {
+    tokens.push({
+      className: match[1],
+      index: match.index,
+    });
+  }
+
+  return tokens;
+}
+
+function getBlockClassName(className: string) {
+  return className.split("__")[0].split("--")[0];
+}
+
+function getPreferredClassTarget(
+  className: string,
+  classMap: Map<string, Set<ClassCssTarget>>,
+) {
+  const matches = classMap.get(className);
+  if (!matches || matches.size === 0) {
+    return null;
+  }
+
+  return [...matches].find((target) => target.className === className) ?? [...matches][0];
+}
+
+function selectorNeedsScopedFallback(selector: string) {
+  const trimmed = selector.trim();
+  return trimmed !== getLastCompoundSelector(trimmed) ||
+    /[\[\]>+~]|\s+|:(?:has|is|where|not|nth-)/i.test(trimmed);
+}
+
+function getOwningClassTarget(
+  selector: string,
+  classMap: Map<string, Set<ClassCssTarget>>,
+  targetByClassName: Map<string, ClassCssTarget>,
+) {
+  const tokens = getSelectorClassTokens(selector);
+  const matchedTargets = tokens
+    .map((token) => getPreferredClassTarget(token.className, classMap))
+    .filter((target): target is ClassCssTarget => Boolean(target));
+
+  const explicitBlock = matchedTargets.find((target) => !target.className.includes("__"));
+  if (explicitBlock) {
+    return explicitBlock;
+  }
+
+  for (const target of matchedTargets) {
+    const blockTarget = targetByClassName.get(getBlockClassName(target.className));
+    if (blockTarget) {
+      return blockTarget;
+    }
+  }
+
+  return matchedTargets[0] ?? null;
+}
+
+function mapSelectorToGeneratedBem(
+  selector: string,
+  owner: ClassCssTarget,
+  classMap: Map<string, Set<ClassCssTarget>>,
+) {
+  let ownerReplaced = false;
+  const mappedSelector = selector.replace(
+    /\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)/g,
+    (match, className: string) => {
+      const target = getPreferredClassTarget(className, classMap);
+      if (!target) {
+        return match;
+      }
+
+      if (!ownerReplaced && target.className === owner.className) {
+        ownerReplaced = true;
+        return "%root%";
+      }
+
+      return `.${target.className}`;
+    },
+  );
+
+  return ownerReplaced ? mappedSelector : `%root% ${mappedSelector}`;
+}
+
+function scopedSelectorSuffix(scopedSelector: string) {
+  return scopedSelector.startsWith("%root%")
+    ? scopedSelector.slice("%root%".length)
+    : ` ${scopedSelector}`;
+}
+
+function formatRawAtRule(selector: string, body: string) {
+  return `${selector} {\n${indent(body.trim(), 2)}\n}`;
+}
+
+function formatCssBucket(
+  bucket: ElementCssBucket | ClassCssBucket,
+  minify?: boolean,
+) {
+  const snippets: string[] = [];
+
+  bucket.root.forEach((declarationList, rootSuffix) => {
+    snippets.push(formatRootDeclarations(
+      declarationList.join("\n"),
+      rootSuffix,
+      minify,
+    ));
+  });
+
+  bucket.media.forEach((mediaBucket, mediaSelector) => {
+    mediaBucket.forEach((declarationList, rootSuffix) => {
+      snippets.push(formatMediaDeclarations(
+        mediaSelector,
+        declarationList.join("\n"),
+        rootSuffix,
+        minify,
+      ));
+    });
+  });
+
+  bucket.raw.forEach((rawCss) => {
+    if (rawCss.trim()) {
+      snippets.push(rawCss.trim());
+    }
+  });
+
+  return snippets.join("\n\n");
+}
+
 export function attachCssToElements(
   css: string,
   targets: ElementCssTarget[],
@@ -299,6 +1016,9 @@ export function attachCssToElements(
   let attachedRuleCount = 0;
   let unmappedRuleCount = 0;
   let pseudoSelectorCount = 0;
+  let customCssFallbackCount = 0;
+  let responsiveRuleCount = 0;
+  let pseudoRuleCount = 0;
 
   targets.forEach((target) => {
     getClassAliases(target).forEach((className) => addMapEntry(classMap, className, target));
@@ -314,6 +1034,7 @@ export function attachCssToElements(
     const bucket = attachmentBuckets.get(target) ?? {
       root: new Map<string, string[]>(),
       media: new Map<string, Map<string, string[]>>(),
+      raw: [],
     };
 
     if (mediaSelector) {
@@ -333,6 +1054,7 @@ export function attachCssToElements(
     blocks.forEach((block) => {
       if (/^@media\b/i.test(block.selector)) {
         processBlocks(block.body, block.selector);
+        responsiveRuleCount += 1;
         pushWarning(
           warnings,
           `CSS media query "${block.selector}" was attached to matching elements using element custom CSS.`,
@@ -370,6 +1092,9 @@ export function attachCssToElements(
           pushWarning(warnings, `Dropped pseudo selector "${selector}"; it could not be safely attached to a single Bricks element.`);
           return;
         }
+        if (pseudo.suffix) {
+          pseudoRuleCount += 1;
+        }
 
         const resolved = resolveSelectorTargets(selector, classMap, idMap);
         if (!resolved.hasTargetableSelector) {
@@ -403,29 +1128,11 @@ export function attachCssToElements(
   processBlocks(css);
 
   attachmentBuckets.forEach((bucket, target) => {
-    const snippets: string[] = [];
+    const css = formatCssBucket(bucket, options.minify);
 
-    bucket.root.forEach((declarationList, rootSuffix) => {
-      snippets.push(formatRootDeclarations(
-        declarationList.join("\n"),
-        rootSuffix,
-        options.minify,
-      ));
-    });
-
-    bucket.media.forEach((mediaBucket, mediaSelector) => {
-      mediaBucket.forEach((declarationList, rootSuffix) => {
-        snippets.push(formatMediaDeclarations(
-          mediaSelector,
-          declarationList.join("\n"),
-          rootSuffix,
-          options.minify,
-        ));
-      });
-    });
-
-    if (snippets.length > 0) {
-      attachElementCss(target.element, snippets.join("\n\n"));
+    if (css) {
+      attachElementCss(target.element, css);
+      customCssFallbackCount += 1;
     }
   });
 
@@ -434,5 +1141,305 @@ export function attachCssToElements(
     attachedRuleCount,
     unmappedRuleCount,
     pseudoSelectorCount,
+    nativeStyleMappedCount: 0,
+    customCssFallbackCount,
+    blockScopedFallbackCount: 0,
+    responsiveRuleCount,
+    pseudoRuleCount,
+    unresolvedSelectorCount: unmappedRuleCount,
+    styledClassIds: new Set(),
+  };
+}
+
+export function attachCssToGlobalClasses(
+  css: string,
+  targets: ClassCssTarget[],
+  options: ElementCssOptions = {},
+): ElementCssResult {
+  const warnings: ConversionWarning[] = [];
+  const classMap = new Map<string, Set<ClassCssTarget>>();
+  const idMap = new Map<string, Set<ClassCssTarget>>();
+  const targetByClassName = new Map<string, ClassCssTarget>();
+  const attachmentBuckets = new Map<ClassCssTarget, ClassCssBucket>();
+  let attachedRuleCount = 0;
+  let unmappedRuleCount = 0;
+  let pseudoSelectorCount = 0;
+  let nativeStyleMappedCount = 0;
+  let customCssFallbackCount = 0;
+  let blockScopedFallbackCount = 0;
+  let responsiveRuleCount = 0;
+  let pseudoRuleCount = 0;
+  const keyframesByName = new Map<string, string>();
+  const styledClassIds = new Set<string>();
+
+  targets.forEach((target) => {
+    if (!targetByClassName.has(target.className)) {
+      targetByClassName.set(target.className, target);
+    }
+    unique([...target.sourceClasses, target.className]).forEach((className) =>
+      addClassMapEntry(classMap, className, target)
+    );
+    addClassMapEntry(idMap, target.sourceId, target);
+  });
+
+  const rootTarget = targets.find((target) => !target.className.includes("__")) ?? targets[0];
+
+  const addDeclarations = (
+    target: ClassCssTarget,
+    declarations: string,
+    rootSuffix: string,
+    mediaSelector?: string,
+  ) => {
+    const bucket = attachmentBuckets.get(target) ?? {
+      root: new Map<string, string[]>(),
+      media: new Map<string, Map<string, string[]>>(),
+      raw: [],
+    };
+
+    if (mediaSelector) {
+      const mediaBucket = bucket.media.get(mediaSelector) ?? new Map<string, string[]>();
+      mediaBucket.set(rootSuffix, [...(mediaBucket.get(rootSuffix) ?? []), declarations]);
+      bucket.media.set(mediaSelector, mediaBucket);
+    } else {
+      bucket.root.set(rootSuffix, [...(bucket.root.get(rootSuffix) ?? []), declarations]);
+    }
+
+    attachmentBuckets.set(target, bucket);
+  };
+
+  const addRawCss = (
+    target: ClassCssTarget,
+    rawCss: string,
+  ) => {
+    const bucket = attachmentBuckets.get(target) ?? {
+      root: new Map<string, string[]>(),
+      media: new Map<string, Map<string, string[]>>(),
+      raw: [],
+    };
+
+    if (!bucket.raw.includes(rawCss)) {
+      bucket.raw.push(rawCss);
+    }
+
+    attachmentBuckets.set(target, bucket);
+  };
+
+  const processBlocks = (inputCss: string, mediaSelector?: string) => {
+    const blocks = parseTopLevelBlocks(inputCss);
+
+    blocks.forEach((block) => {
+      if (/^@media\b/i.test(block.selector)) {
+        responsiveRuleCount += 1;
+        processBlocks(block.body, block.selector);
+        pushWarning(
+          warnings,
+          `Responsive rule "${block.selector}" was preserved on matching Bricks classes.`,
+          "info",
+        );
+        return;
+      }
+
+      if (/^@(?:container|supports)\b/i.test(block.selector)) {
+        processBlocks(block.body, block.selector);
+        pushWarning(
+          warnings,
+          `At-rule "${block.selector}" was preserved in class Custom CSS where native mapping was unavailable.`,
+          "info",
+        );
+        return;
+      }
+
+      if (/^@(?:-\w+-)?keyframes\b/i.test(block.selector)) {
+        const name = block.selector.replace(/^@(?:-\w+-)?keyframes\s+/i, "").trim();
+        const rawCss = formatRawAtRule(block.selector, block.body);
+        if (keyframesByName.has(name) && keyframesByName.get(name) !== rawCss) {
+          pushWarning(
+            warnings,
+            `Keyframes "${name}" has conflicting definitions. The first definition was preserved on ${rootTarget?.className ?? "the root class"}.`,
+          );
+          return;
+        }
+
+        if (!keyframesByName.has(name) && rootTarget) {
+          keyframesByName.set(name, rawCss);
+          addRawCss(rootTarget, rawCss);
+          styledClassIds.add(rootTarget.globalClass.id);
+          customCssFallbackCount += 1;
+          blockScopedFallbackCount += 1;
+          pushWarning(
+            warnings,
+            `Keyframes "${name}" were preserved once in custom CSS on ${rootTarget.className}.`,
+            "info",
+          );
+        }
+        return;
+      }
+
+      if (/^@font-face\b/i.test(block.selector)) {
+        unmappedRuleCount += 1;
+        pushWarning(
+          warnings,
+          "@font-face was detected and listed as a font dependency instead of being duplicated into Bricks class CSS.",
+          "info",
+        );
+        return;
+      }
+
+      if (block.selector === ":root") {
+        unmappedRuleCount += 1;
+        pushWarning(warnings, "CSS :root variables were detected. Variable references are preserved, but variable import is not implemented yet.", "info");
+        return;
+      }
+
+      if (/^@/.test(block.selector)) {
+        if (rootTarget) {
+          addRawCss(rootTarget, formatRawAtRule(block.selector, block.body));
+          styledClassIds.add(rootTarget.globalClass.id);
+          customCssFallbackCount += 1;
+          blockScopedFallbackCount += 1;
+          pushWarning(
+            warnings,
+            `Unsupported at-rule "${block.selector}" was preserved in custom CSS on ${rootTarget.className}; fidelity may differ.`,
+          );
+        } else {
+          unmappedRuleCount += 1;
+          pushWarning(warnings, `Unsupported at-rule "${block.selector}" could not be attached because no owning class exists.`);
+        }
+        return;
+      }
+
+      const declarations = parseDeclarations(block.body);
+      if (declarations.length === 0) {
+        return;
+      }
+
+      block.selector.split(",").forEach((rawSelector) => {
+        const selector = rawSelector.trim();
+        if (!selector) {
+          return;
+        }
+
+        const pseudo = getPseudoSuffix(selector);
+        if (pseudo.suffix) {
+          pseudoSelectorCount += 1;
+          pseudoRuleCount += 1;
+        }
+
+        if (selectorNeedsScopedFallback(selector) || pseudo.unsupported) {
+          const owner = getOwningClassTarget(selector, classMap, targetByClassName);
+          const tokens = getSelectorClassTokens(selector);
+          const missingTokens = tokens.filter((token) => !getPreferredClassTarget(token.className, classMap));
+          if (!owner || missingTokens.length > 0) {
+            unmappedRuleCount += 1;
+            pushWarning(
+              warnings,
+              `Selector "${selector}" could not be safely mapped to generated classes. Missing: ${missingTokens.map((token) => `.${token.className}`).join(", ") || "owning class"}.`,
+            );
+            return;
+          }
+
+          const scopedSelector = mapSelectorToGeneratedBem(selector, owner, classMap);
+          addDeclarations(
+            owner,
+            declarations.map(formatDeclaration).join("\n"),
+            scopedSelectorSuffix(scopedSelector),
+            mediaSelector,
+          );
+          customCssFallbackCount += declarations.length;
+          blockScopedFallbackCount += 1;
+          styledClassIds.add(owner.globalClass.id);
+          attachedRuleCount += 1;
+          pushWarning(
+            warnings,
+            `"${selector}" was scoped to the "${owner.className}" class using "${scopedSelector}".`,
+            "info",
+          );
+          return;
+        }
+
+        const resolved = resolveClassSelectorTargets(selector, classMap, idMap);
+        if (!resolved.hasTargetableSelector) {
+          unmappedRuleCount += 1;
+          pushWarning(warnings, `Selector "${selector}" could not be mapped to a generated Bricks class.`);
+          return;
+        }
+
+        if (resolved.missingNames.length > 0 || resolved.targets.size === 0) {
+          unmappedRuleCount += 1;
+          pushWarning(
+            warnings,
+            `Selector "${selector}" references classes or IDs not present in exported layers: ${resolved.missingNames.join(", ")}.`,
+          );
+          return;
+        }
+
+        resolved.targets.forEach((target) => {
+          const breakpoint = getBreakpointFromMedia(mediaSelector);
+          const state = getStateFromPseudo(pseudo.suffix);
+          const canMapNatively = (!mediaSelector || Boolean(breakpoint)) &&
+            (!pseudo.suffix || Boolean(state));
+          const fallbackDeclarations: CssDeclaration[] = [];
+
+          declarations.forEach((declaration) => {
+            const mapped = canMapNatively &&
+              applyNativeSetting(target.globalClass.settings, declaration, breakpoint, state);
+            if (mapped) {
+              nativeStyleMappedCount += 1;
+              return;
+            }
+
+            fallbackDeclarations.push(declaration);
+          });
+
+          if (fallbackDeclarations.length > 0) {
+            addDeclarations(
+              target,
+              fallbackDeclarations.map(formatDeclaration).join("\n"),
+              pseudo.suffix,
+              mediaSelector,
+            );
+            customCssFallbackCount += fallbackDeclarations.length;
+            fallbackDeclarations.forEach((declaration) => {
+              pushWarning(
+                warnings,
+                `"${declaration.property}" from "${selector}" was preserved in custom CSS on "${target.className}".`,
+                "info",
+              );
+            });
+          }
+
+          styledClassIds.add(target.globalClass.id);
+        });
+        attachedRuleCount += resolved.targets.size;
+      });
+    });
+
+    if (!mediaSelector && blocks.length === 0 && inputCss.trim()) {
+      unmappedRuleCount += 1;
+      pushWarning(warnings, "CSS could not be parsed into rules and was not attached.");
+    }
+  };
+
+  processBlocks(css);
+
+  attachmentBuckets.forEach((bucket, target) => {
+    const cssValue = formatCssBucket(bucket, options.minify);
+    if (cssValue) {
+      target.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] = cssValue;
+    }
+  });
+
+  return {
+    warnings,
+    attachedRuleCount,
+    unmappedRuleCount,
+    pseudoSelectorCount,
+    nativeStyleMappedCount,
+    customCssFallbackCount,
+    blockScopedFallbackCount,
+    responsiveRuleCount,
+    pseudoRuleCount,
+    unresolvedSelectorCount: unmappedRuleCount,
+    styledClassIds,
   };
 }

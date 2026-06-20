@@ -108,6 +108,5 @@ export function createBricksElementLabel(options: LabelOptions) {
 
 export function applyBricksElementLabel(element: BricksElement, label: string) {
   element[BRICKS_ELEMENT_LABEL_FIELD] = label;
-  element.settings._jigmaLabel = label;
   return element;
 }
