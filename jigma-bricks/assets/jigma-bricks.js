@@ -18,10 +18,10 @@
   var BRICKS_ELEMENT_CUSTOM_CSS_FIELD = "_cssCustom";
 
   var state = {
-    html: '<section class="hero-section">\\n  <div class="hero-content">\\n    <p class="hero-eyebrow">Code to Bricks</p>\\n    <h1 class="hero-title">Paste code. Copy Bricks structure.</h1>\\n    <p class="hero-text">Jigma creates element classes and Bricks-ready structure from pasted frontend code.</p>\\n    <div class="hero-actions">\\n      <a class="hero-button hero-button--primary" href="#start">Start</a>\\n      <a class="hero-button hero-button--secondary" href="#preview">Preview</a>\\n    </div>\\n  </div>\\n</section>',
-    css: ".hero-section {\\n  padding: 72px 48px;\\n  background: #080b16;\\n  color: white;\\n}\\n\\n.hero-content {\\n  max-width: 760px;\\n}\\n\\n.hero-title {\\n  font-size: 64px;\\n  line-height: 1;\\n}\\n\\n.hero-button {\\n  display: inline-flex;\\n  padding: 14px 18px;\\n  border-radius: 10px;\\n}\\n\\n.hero-button--secondary {\\n  border: 1px solid currentColor;\\n}\\n\\n@media (max-width: 820px) {\\n  .hero-title {\\n    font-size: 42px;\\n  }\\n}",
+    html: "",
+    css: "",
     js: "",
-    includeJsCode: false,
+    includeJsCode: true,
     lastExport: null,
   };
 
@@ -1141,13 +1141,13 @@
 
     if (state.js.trim() && state.includeJsCode) {
       warnings.push({
-        severity: "warning",
-        message: "JavaScript will be inserted as a disabled Bricks Code element for manual review.",
+        severity: "action-required",
+        message: "JavaScript signature required. Included as one unsigned Bricks Code element. Review and sign after import.",
       });
     } else if (state.js.trim()) {
       warnings.push({
         severity: "warning",
-        message: "JavaScript was detected but not converted. Rebuild behavior manually in Bricks or review it as custom code.",
+        message: "JavaScript detected. Excluded from Bricks export. The source remains in Jigma.",
       });
     }
 
@@ -1179,9 +1179,9 @@
         children: [],
         settings: {
           executeCode: false,
-          javascriptCode: state.js.trim(),
+          javascriptCode: state.js,
         },
-        label: "Jigma JavaScript Review",
+        label: "Jigma Section JavaScript",
       };
       built.content.push(optionalCodeElement);
     }
@@ -1251,7 +1251,7 @@
     return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>html,body{margin:0;min-height:100%;font-family:Inter,system-ui,sans-serif;background:#f8fafc;}*{box-sizing:border-box;}" +
       state.css +
       "</style></head><body>" +
-      state.html +
+      (state.html || "<main style=\"min-height:180px;display:grid;place-items:center;color:#64748b;\">Start with HTML, CSS or JavaScript</main>") +
       (state.js.trim() ? "<script>try{" + state.js + "}catch(error){parent.postMessage({source:'jigma-bricks-panel',type:'preview-error',message:error.message},'*');}<\/script>" : "") +
       "</body></html>";
   }
@@ -1343,8 +1343,8 @@
       textarea("CSS", state.css, function (value) { state.css = value; }),
       textarea("JavaScript", state.js, function (value) { state.js = value; }),
       checkbox(
-        "Include JavaScript as review Code element",
-        "Optional. Jigma inserts it disabled so behavior can be reviewed manually in Bricks.",
+        "Include JavaScript in Bricks",
+        "Creates one unsigned Code element with execution disabled. Review and sign it inside Bricks.",
         state.includeJsCode,
         function (value) { state.includeJsCode = value; }
       ),
@@ -1381,7 +1381,8 @@
       JigmaBricksInsertAdapter.insert(result.payload, {
         includeJsCode: state.includeJsCode,
       }).then(function (data) {
-        status.textContent = (data.message || "Jigma elements inserted.") + " Inserted: " + (data.insertedCount || result.payload.validation.totalElements) + ". Reload the Bricks builder to view them on the canvas.";
+        var codeWarning = data.codeWarnings && data.codeWarnings.length ? " " + data.codeWarnings[0] : "";
+        status.textContent = (data.message || "Jigma elements inserted.") + " Inserted: " + (data.insertedCount || result.payload.validation.totalElements) + "." + codeWarning + " Reload the Bricks builder to view them on the canvas.";
       }).catch(function (error) {
         status.textContent = error.message || "Jigma insert failed.";
       }).finally(function () {

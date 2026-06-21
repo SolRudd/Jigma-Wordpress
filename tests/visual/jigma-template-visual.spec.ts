@@ -1,8 +1,5 @@
 import { expect, test } from "@playwright/test";
-import {
-  getTemplateByKey,
-  jigmaHeaderHeroComposition,
-} from "../../lib/templates.ts";
+import { getTemplateByKey } from "../../lib/templates.ts";
 
 const viewports = [
   { name: "1440x900", width: 1440, height: 900 },
@@ -13,10 +10,9 @@ const viewports = [
 ];
 
 const header = getTemplateByKey("jigma-header");
-const hero = getTemplateByKey("jigma-hero");
 
-if (!header || !hero) {
-  throw new Error("Required Jigma templates are not registered.");
+if (!header) {
+  throw new Error("Required Jigma Header template is not registered.");
 }
 
 const cases = [
@@ -25,18 +21,6 @@ const cases = [
     html: header.html,
     css: header.css,
     javascript: header.javascript,
-  },
-  {
-    id: "jigma-hero",
-    html: hero.html,
-    css: hero.css,
-    javascript: hero.javascript,
-  },
-  {
-    id: "jigma-header-hero",
-    html: jigmaHeaderHeroComposition.html,
-    css: jigmaHeaderHeroComposition.css,
-    javascript: jigmaHeaderHeroComposition.javascript,
   },
 ];
 
@@ -82,3 +66,36 @@ for (const viewport of viewports) {
     });
   }
 }
+
+test("jigma-header mobile menu toggles and closes", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setContent(renderDocument({
+    html: header.html,
+    css: header.css,
+    javascript: header.javascript,
+  }), { waitUntil: "networkidle" });
+
+  const toggle = page.locator(".jigma-header__toggle");
+  const menu = page.locator("#jigma-header-menu");
+
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(menu).toHaveAttribute("hidden", "");
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(menu).not.toHaveAttribute("hidden", "");
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(menu).toHaveAttribute("hidden", "");
+
+  await toggle.click();
+  await page.keyboard.press("Escape");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(menu).toHaveAttribute("hidden", "");
+
+  await toggle.click();
+  await page.locator("#jigma-header-menu a").first().click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(menu).toHaveAttribute("hidden", "");
+});

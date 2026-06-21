@@ -360,6 +360,19 @@ function makeCodeElement(
   };
 }
 
+function titleCaseWords(value: string) {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function makeJavaScriptCodeLabel(blockName: string) {
+  const labelBase = titleCaseWords(blockName);
+  return `${/^jigma\b/i.test(labelBase) ? labelBase : `Jigma ${labelBase || "Section"}`} JavaScript`;
+}
+
 function validateHierarchy(content: BricksElement[]) {
   const ids = new Set(content.map((element) => element.id));
   return content.every((element) =>
@@ -1233,32 +1246,33 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   let jsWarningCount = 0;
   if (input.js.trim()) {
     jsWarningCount += 1;
-    unsignedJavaScriptCodeCount += 1;
     if (input.options.includeJavaScriptCode) {
-      content.push(makeCodeElement("jigma-javascript-review", `${bemFactory.blockName} JavaScript`, {
+      unsignedJavaScriptCodeCount += 1;
+      content.push(makeCodeElement("jigma-javascript-review", makeJavaScriptCodeLabel(bemFactory.blockName), {
         executeCode: false,
-        javascript: input.js,
-        js: input.js,
+        javascriptCode: input.js,
       }));
     }
     pushGroupedWarning(warnings, {
       id: "javascript-review-required",
       code: "javascript.review_required",
       severity: "action-required",
-      title: "JavaScript review required",
+      title: input.options.includeJavaScriptCode ? "JavaScript signature required" : "JavaScript detected",
       summary: input.options.includeJavaScriptCode
-        ? "JavaScript was included as one disabled unsigned Code element for review."
-        : "JavaScript was detected but not converted into builder-native behavior.",
+        ? "Included as one unsigned Bricks Code element. Review and sign after import."
+        : "Excluded from Bricks export. The source remains saved in Jigma.",
       message: input.options.includeJavaScriptCode
-        ? "JavaScript was included as one disabled unsigned Code element for review."
-        : "JavaScript was detected but not converted into builder-native behavior.",
+        ? "Included as one unsigned Bricks Code element. Review and sign after import."
+        : "Excluded from Bricks export. The source remains saved in Jigma.",
       details: [
         input.options.includeJavaScriptCode
-          ? "Jigma created one disabled Bricks Code element and did not fabricate a signature."
-          : "Jigma does not silently insert JavaScript into the default Bricks structure.",
-        "Review behavior manually before enabling custom code in Bricks.",
+          ? "This section contains one unsigned Bricks Code element. Review and sign it inside Bricks before enabling execution."
+          : "Jigma kept the JavaScript in the editor and did not add a Bricks Code element.",
+        "Execution is disabled by default.",
       ],
-      suggestedAction: "Rebuild interactions with Bricks-native controls where possible, or add reviewed JavaScript manually.",
+      suggestedAction: input.options.includeJavaScriptCode
+        ? "Review and sign the Code element inside Bricks before enabling execution."
+        : "Turn on Include JavaScript in Bricks when you want one disabled Code element created.",
     });
   }
 

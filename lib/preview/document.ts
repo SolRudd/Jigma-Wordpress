@@ -2,6 +2,10 @@ import { serializeHtml } from "../parser/html.ts";
 
 export const PREVIEW_HOVER_INSPECTOR_ENABLED = false;
 
+function scriptLiteral(value: string) {
+  return JSON.stringify(value).replaceAll("<", "\\u003C");
+}
+
 export function createPreviewDocument(input: {
   html: string;
   css: string;
@@ -16,6 +20,7 @@ export function createPreviewDocument(input: {
     deletedLayerIds: input.deletedLayerIds,
     skipScripts: true,
   });
+  const userScript = input.js.trim() ? scriptLiteral(input.js) : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -38,7 +43,7 @@ ${input.css}
   </style>
 </head>
 <body>
-${bodyHtml || `<main style="padding:32px;font:16px/1.5 system-ui;color:#475569;">Run HTML to preview it here.</main>`}
+${bodyHtml || `<main style="min-height:100vh;display:grid;place-items:center;padding:32px;font:16px/1.5 system-ui;color:#8da0bd;background:#07101c;"><section style="max-width:360px;text-align:center;"><h1 style="margin:0 0 8px;font-size:20px;color:#e5ecff;">Start with HTML, CSS or JavaScript</h1><p style="margin:0;color:#9fb0ca;">Paste your code and run the preview.</p></section></main>`}
   <script>
     (function () {
       var send = function (message) {
@@ -65,6 +70,12 @@ ${bodyHtml || `<main style="padding:32px;font:16px/1.5 system-ui;color:#475569;"
       });
 
       send({ type: "ready" });
+      var userCode = ${userScript || "''"};
+      if (userCode) {
+        var script = document.createElement("script");
+        script.textContent = userCode;
+        document.body.appendChild(script);
+      }
     })();
   </script>
 </body>

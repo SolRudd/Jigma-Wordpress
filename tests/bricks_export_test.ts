@@ -27,6 +27,18 @@ import {
   createPreviewDocument,
 } from "../lib/preview/document.ts";
 import {
+  createLocalSavedSection,
+  createSavedSectionSource,
+  deleteSavedSection,
+  duplicateSavedSection,
+  exportSavedSectionJson,
+  importSavedSectionJson,
+  renameSavedSection,
+  serializeSavedSections,
+  parseSavedSections,
+  upsertSavedSection,
+} from "../lib/saved-sections.ts";
+import {
   advancedTemplates,
   getAdvancedTemplateByKey,
   getTemplateByKey,
@@ -317,6 +329,44 @@ describe("Bricks export", () => {
       .toBe("Review required");
   });
 
+  it("starts new users with a blank workspace and no auto-loaded template", () => {
+    const markup = renderToStaticMarkup(createElement(JigmaBuilder));
+
+    expect(markup).toContain('value="jg"');
+    expect(markup).toContain('value="section"');
+    expect(markup).toContain("Start with HTML, CSS or JavaScript");
+    expect(markup).toContain("Paste your code and run the preview.");
+    expect(markup).toContain("No layers yet");
+    expect(markup).toContain("Load Header Example");
+    expect(markup).not.toContain("Reset Header Example");
+    expect(markup).not.toContain("jigma-header__inner");
+    expect(markup).not.toContain("jigma-hero__visual");
+    expect(markup).toContain("Copy Bricks Structure");
+    expect(markup).toContain("disabled=\"\"");
+  });
+
+  it("keeps Header HTML, CSS and JavaScript separate and preview-runnable", () => {
+    const header = getTemplateByKey("jigma-header")!;
+    const previewDocument = createPreviewDocument({
+      html: header.html,
+      css: header.css,
+      js: header.javascript,
+      activeLayerId: null,
+      deletedLayerIds: new Set(),
+      highlightsEnabled: false,
+    });
+
+    expect(header.html).toContain("jigma-header__mobile-menu");
+    expect(header.html).not.toMatch(/<style|<script/i);
+    expect(header.css).toContain(".jigma-header");
+    expect(header.css).not.toMatch(/<script|<\/script/i);
+    expect(header.javascript).toContain("aria-expanded");
+    expect(header.javascript).not.toContain(".jigma-header {");
+    expect(previewDocument).toContain("document.createElement(\"script\")");
+    expect(previewDocument).toContain("jigma-header__toggle");
+    expect(previewDocument).toContain("aria-expanded");
+  });
+
   it("fixture exports generate valid Bricks hierarchy", () => {
     sectionFixtures.forEach((fixture) => {
       const result = exportFor(fixture.html, fixture.css);
@@ -502,11 +552,9 @@ describe("Bricks export", () => {
   it("ships a focused template library for the beta workspace", () => {
     expect(templates.map((template) => template.name)).toEqual([
       "Jigma Header",
-      "Jigma Hero",
     ]);
 
     const header = getTemplateByKey("jigma-header");
-    const hero = getTemplateByKey("jigma-hero");
 
     expect(header?.html).toContain("jigma-header__toggle");
     expect(header?.html).toContain("jigma-header__logo-svg");
@@ -515,26 +563,16 @@ describe("Bricks export", () => {
     expect(header?.javascript).not.toContain("onclick");
     expect(header?.prefix).toBe("jigma");
     expect(header?.blockName).toBe("header");
-    expect(hero?.html).toContain("jigma-hero__visual-svg");
-    expect(hero?.html).not.toContain("jigma-hero__header");
-    expect(hero?.html).not.toContain("jigma-hero__nav");
-    expect(hero?.css).not.toContain(".jigma-hero__header");
-    expect(hero?.css).not.toContain(".jigma-hero__nav");
-    expect(hero?.html).not.toContain("jigma-hero__rotator");
-    expect(hero?.css).not.toContain("@keyframes jh-rotate");
-    expect(hero?.prefix).toBe("jigma");
-    expect(hero?.blockName).toBe("hero");
-    expect(hero?.css).toContain("--jh-grad-text");
-    expect(hero?.css).toContain("font-weight: 800");
-    expect(templates).toHaveLength(2);
+    expect(templates).toHaveLength(1);
+    expect(getTemplateByKey("jigma-hero")).toBeNull();
     expect(getTemplateByKey("missing-template")).toBeNull();
   });
 
   it("keeps Header, Hero, fidelity, and composition sources separated", () => {
     const header = getTemplateByKey("jigma-header")!;
-    const hero = getTemplateByKey("jigma-hero")!;
     const fidelityHero = getAdvancedTemplateByKey("jigma-hero-fidelity")!;
     const composition = getTemplateCompositionByKey("jigma-header-hero")!;
+    const hero = composition.sources.find((source) => source.id === "jigma-hero")!;
 
     expect(advancedTemplates.map((template) => template.name)).toEqual([
       "Jigma Hero Fidelity Stress Test",
@@ -898,9 +936,9 @@ describe("Bricks export", () => {
       projectPrefix: "jg",
       blockName: "media-tabs",
     });
-    expect(jsDefault.content.filter((element) => element.label === "media-tabs JavaScript")).toHaveLength(0);
+    expect(jsDefault.content.filter((element) => element.label === "Jigma Media Tabs JavaScript")).toHaveLength(0);
     expect(jsDefault.content.filter((element) => element.label === "Jigma Component Styles")).toHaveLength(0);
-    expect(jsDefault.validation.unsignedJavaScriptCodeCount).toBe(1);
+    expect(jsDefault.validation.unsignedJavaScriptCodeCount).toBe(0);
     expect(jsDefault.warnings.some((warning) => warning.code === "javascript.review_required")).toBe(true);
 
     const jsOptional = exportFor(mediaFixtures[15].html, mediaFixtures[15].css, mediaFixtures[15].js, {
@@ -908,11 +946,13 @@ describe("Bricks export", () => {
       blockName: "media-tabs",
       includeJavaScriptCode: true,
     });
-    const jsCodeElements = jsOptional.content.filter((element) => element.label === "media-tabs JavaScript");
+    const jsCodeElements = jsOptional.content.filter((element) => element.label === "Jigma Media Tabs JavaScript");
     expect(jsCodeElements).toHaveLength(1);
-    expect(jsCodeElements[0].label).toBe("media-tabs JavaScript");
+    expect(jsCodeElements[0].label).toBe("Jigma Media Tabs JavaScript");
     expect(jsCodeElements[0].settings.executeCode).toBe(false);
-    expect(`${jsCodeElements[0].settings.javascript ?? ""}`).toContain("addEventListener");
+    expect(`${jsCodeElements[0].settings.javascriptCode ?? ""}`).toContain("addEventListener");
+    expect(jsCodeElements[0].settings.javascript).toBeUndefined();
+    expect(jsCodeElements[0].settings.js).toBeUndefined();
 
     const inlineEvent = exportFor(mediaFixtures[16].html, mediaFixtures[16].css, "", {
       projectPrefix: "jg",
@@ -946,11 +986,11 @@ describe("Bricks export", () => {
     expect(markup).toContain("Preview");
     expect(markup).toContain("Inspect");
     expect(markup).toContain("Template Library");
-    expect(markup).toContain("Jigma Header");
-    expect(markup).toContain("Hero");
-    expect(markup).toContain("Reset Template");
-    expect(markup).toContain("Save Preset locally");
-    expect(markup).toContain("Load Preset locally");
+    expect(markup).toContain("Load Header Example");
+    expect(markup).not.toContain("Jigma Hero");
+    expect(markup).not.toContain("Reset Template");
+    expect(markup).toContain("Save Section locally");
+    expect(markup).toContain("Load Saved Section");
     expect(markup).toContain("Export JSON");
     expect(markup).toContain("Import JSON");
     expect(markup).toContain("Layers");
@@ -980,9 +1020,11 @@ describe("Bricks export", () => {
     );
 
     expect(markup).toContain("Template Library");
-    expect(markup).toContain("Jigma Header");
-    expect(markup).toContain("Jigma Hero");
-    expect(markup).toContain("Reset Template");
+    expect(markup).toContain("Load Header Example");
+    expect(markup).not.toContain("Jigma Hero");
+    expect(markup).not.toContain("Reset Header Example");
+    expect(markup).toContain("Start with HTML, CSS or JavaScript");
+    expect(markup).toContain("No layers yet");
     expect(markup).toContain('role="tablist" aria-label="Source editors"');
     expect(markup).toContain('id="source-tab-html"');
     expect(markup).toContain('id="source-tab-css"');
@@ -1003,8 +1045,8 @@ describe("Bricks export", () => {
     expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain("Copy Bricks Structure");
     expect(markup).toContain("Copy Structure");
-    expect(markup).toContain("Save Preset locally");
-    expect(markup).toContain("Load Preset locally");
+    expect(markup).toContain("Save Section locally");
+    expect(markup).toContain("Load Saved Section");
     expect(markup).toContain("Export JSON");
     expect(markup).toContain("Import JSON");
     expect(markup).toContain('class="workspace-mode-tabs"');
@@ -1015,6 +1057,10 @@ describe("Bricks export", () => {
     expect(builderSource).toContain("Output format");
     expect(builderSource).toContain("Native Bricks Classes");
     expect(builderSource).toContain("showAllWarnings");
+    expect(builderSource).toContain("No dependencies detected");
+    expect(builderSource).toContain("No issues to review");
+    expect(builderSource).toContain("Add some HTML before exporting.");
+    expect(builderSource).toContain("Include JavaScript in Bricks");
   });
 
   it("saves local preset values and applies them to fallback BEM output", () => {
@@ -1062,6 +1108,34 @@ describe("Bricks export", () => {
     expect(imported.preset?.prefix).toBe("team");
     expect(validatePresetImport({ name: "Broken" }).valid).toBe(false);
     expect(deleteLocalPreset(deleted, duplicated[0].id)).toHaveLength(0);
+  });
+
+  it("saves, exports, imports, and deletes local sections with JavaScript intact", () => {
+    const source = createSavedSectionSource(
+      `<header class="jigma-header"></header>`,
+      `.jigma-header { color: white; }`,
+      `document.querySelector(".jigma-header")?.setAttribute("data-ready", "true");`,
+      { projectPrefix: "jigma", blockName: "header" },
+    );
+    const section = createLocalSavedSection(source, new Date("2026-01-01T00:00:00.000Z"), "Header Example");
+    const renamed = renameSavedSection([section], section.id, "Signed Header", new Date("2026-01-02T00:00:00.000Z"));
+    const duplicated = duplicateSavedSection(renamed, section.id, new Date("2026-01-03T00:00:00.000Z"));
+    const exported = exportSavedSectionJson(duplicated[0]);
+    const imported = importSavedSectionJson(exported, new Date("2026-01-04T00:00:00.000Z"));
+    const serialized = serializeSavedSections(duplicated);
+    const parsed = parseSavedSections(serialized);
+    const upserted = upsertSavedSection(parsed, imported.section!);
+    const deleted = deleteSavedSection(upserted, section.id);
+
+    expect(section.html).toBe(source.html);
+    expect(section.css).toBe(source.css);
+    expect(section.javascript).toBe(source.javascript);
+    expect(renamed[0].name).toBe("Signed Header");
+    expect(duplicated[0].name).toBe("Signed Header Copy");
+    expect(imported.valid).toBe(true);
+    expect(imported.section?.javascript).toBe(source.javascript);
+    expect(parsed).toHaveLength(2);
+    expect(deleted.some((item) => item.id === section.id)).toBe(false);
   });
 
   it("generates BEM classes for exported elements", () => {
@@ -1618,7 +1692,7 @@ describe("Bricks export", () => {
     expect(result.warnings.filter((warning) => warning.code === "svg.sanitized")).toHaveLength(1);
     expect(result.warnings.filter((warning) => warning.code === "svg.signature_required")).toHaveLength(1);
     expect(result.validation.unsignedSvgCodeCount).toBe(1);
-    expect(result.validation.unsignedJavaScriptCodeCount).toBe(1);
+    expect(result.validation.unsignedJavaScriptCodeCount).toBe(0);
     expect(result.warnings.some((warning) => warning.code === "javascript.review_required")).toBe(true);
   });
 
@@ -2184,10 +2258,17 @@ describe("Bricks export", () => {
     expect(php).toContain("Existing Bricks class");
     expect(php).toContain("$settings['css']     = $css_code;");
     expect(php).toContain("$settings['cssCode'] = $css_code;");
+    expect(php).toContain("$settings['javascriptCode'] = $js_code;");
+    expect(php).toContain("'codeWarnings'  => $code_warnings");
+    expect(php).toContain("JavaScript signature required");
     expect(php).toContain("bricks/security_check_before_save/new_elements");
     expect(php).not.toContain("|| '_cssGlobalClasses' === $key");
     expect(panelJs).toContain("globalClasses: globalClasses");
     expect(panelJs).toContain("settings._cssGlobalClasses");
+    expect(panelJs).toContain("javascriptCode: state.js");
+    expect(panelJs).toContain("executeCode: false");
+    expect(panelJs).toContain("Jigma Section JavaScript");
+    expect(panelJs).toContain("Include JavaScript in Bricks");
     expect(panelJs).not.toContain("Jigma Component Styles");
     expect(panelJs).toContain("literal BEM Custom CSS on the owning class");
     expect(panelJs).toContain("nativeStyleMappedCount");
@@ -2232,17 +2313,51 @@ describe("Bricks export", () => {
     expect(result.content.some((element) => element.name === "code")).toBe(false);
   });
 
-  it("detects JavaScript but does not convert it", () => {
+  it("creates exactly one unsigned Bricks Code element when JavaScript inclusion is enabled", () => {
+    const js = `(() => {
+  document.querySelector(".jigma-header__toggle")?.addEventListener("click", () => {
+    document.body.dataset.menu = "open";
+  });
+})();`;
+    const result = exportFor(
+      `<header class="jigma-header"><button class="jigma-header__toggle">Menu</button></header>`,
+      `.jigma-header { display: flex; }`,
+      js,
+      { projectPrefix: "jigma", blockName: "header", includeJavaScriptCode: true },
+    );
+    const codeElements = result.content.filter((element) => element.name === "code" && element.label === "Jigma Header JavaScript");
+    const headerRootIndex = result.content.findIndex((element) => element.label === "Header");
+    const codeIndex = result.content.findIndex((element) => element.label === "Jigma Header JavaScript");
+
+    expect(codeElements).toHaveLength(1);
+    expect(codeElements[0].parent).toBe(0);
+    expect(codeElements[0].children).toEqual([]);
+    expect(codeElements[0].settings.javascriptCode).toBe(js);
+    expect(codeElements[0].settings.executeCode).toBe(false);
+    expect(codeElements[0].settings.javascript).toBeUndefined();
+    expect(codeElements[0].settings.js).toBeUndefined();
+    expect(codeElements[0].settings.css).toBeUndefined();
+    expect(codeElements[0].settings.html).toBeUndefined();
+    expect(JSON.stringify(codeElements[0].settings).toLowerCase()).not.toContain("signature");
+    expect(codeIndex).toBeGreaterThan(headerRootIndex);
+    expect(result.validation.unsignedJavaScriptCodeCount).toBe(1);
+    expect(result.warnings.filter((warning) => warning.code === "javascript.review_required")).toHaveLength(1);
+    expect(result.warnings.some((warning) => warning.title === "JavaScript signature required")).toBe(true);
+  });
+
+  it("detects JavaScript and excludes it when Code export is off", () => {
     const result = exportFor(
       `<section class="hero"><button class="hero__button">Click</button></section>`,
       `.hero__button { color: red; }`,
       `document.querySelector("button")?.click();`,
+      { includeJavaScriptCode: false },
     );
 
     expect(result.validation.jsWarningCount).toBe(1);
+    expect(result.validation.unsignedJavaScriptCodeCount).toBe(0);
     expect(
       result.warnings.some((warning) =>
-        warning.message.includes("JavaScript was detected but not converted")
+        warning.message.includes("Excluded from Bricks export")
       ),
     ).toBe(true);
     expect(JSON.stringify(result.content)).not.toContain("querySelector");

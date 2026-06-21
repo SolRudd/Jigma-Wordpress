@@ -28,19 +28,19 @@ import {
   templates,
 } from "../../lib/templates.ts";
 import {
-  LEGACY_LOCAL_PRESETS_STORAGE_KEY,
-  LOCAL_PRESETS_STORAGE_KEY,
-  createLocalPreset,
-  deleteLocalPreset,
-  duplicateLocalPreset,
-  exportLocalPresetJson,
-  importLocalPresetJson,
-  parseLocalPresets,
-  renameLocalPreset,
-  serializeLocalPresets,
-  upsertLocalPreset,
-  type LocalJigmaPreset,
-} from "../../lib/presets.ts";
+  LOCAL_SAVED_SECTIONS_STORAGE_KEY,
+  createLocalSavedSection,
+  createSavedSectionSource,
+  deleteSavedSection,
+  duplicateSavedSection,
+  exportSavedSectionJson,
+  importSavedSectionJson,
+  parseSavedSections,
+  renameSavedSection,
+  serializeSavedSections,
+  upsertSavedSection,
+  type LocalSavedSection,
+} from "../../lib/saved-sections.ts";
 import {
   collectLayerIds,
   getLayers,
@@ -68,11 +68,12 @@ const defaultOptions: OutputOptions = {
   exportMode: "native-bem-classes",
   classMode: "strict-bem",
   projectPrefix: "jg",
-  blockName: "hero-jigma",
+  blockName: "section",
   createGlobalClasses: true,
   includeExternalCss: false,
   includeExternalScripts: false,
   minifyElementCss: false,
+  includeJavaScriptCode: true,
 };
 
 export const SOURCE_EDITOR_DEFINITIONS: {
@@ -202,34 +203,61 @@ function collectBranchIds(node: LayerNode) {
   return collectLayerIds([node]);
 }
 
-function readSavedPresets() {
+function readSavedSections() {
   if (typeof window === "undefined") {
     return [];
   }
 
   try {
-    const current = parseLocalPresets(window.localStorage.getItem(LOCAL_PRESETS_STORAGE_KEY));
-    if (current.length > 0) {
-      return current;
-    }
-
-    return parseLocalPresets(window.localStorage.getItem(LEGACY_LOCAL_PRESETS_STORAGE_KEY));
+    return parseSavedSections(window.localStorage.getItem(LOCAL_SAVED_SECTIONS_STORAGE_KEY));
   } catch {
     return [];
   }
 }
 
-function writeSavedPresets(presets: LocalJigmaPreset[]) {
+function writeSavedSections(sections: LocalSavedSection[]) {
   if (typeof window === "undefined") {
     return false;
   }
 
   try {
-    window.localStorage.setItem(LOCAL_PRESETS_STORAGE_KEY, serializeLocalPresets(presets));
+    window.localStorage.setItem(LOCAL_SAVED_SECTIONS_STORAGE_KEY, serializeSavedSections(sections));
     return true;
   } catch {
     return false;
   }
+}
+
+function getSourceSeparationError(input: { html: string; css: string; js: string }): EditorMessage | null {
+  if (/<\/?(?:style|script|html|head|body)\b|<!doctype/i.test(input.html)) {
+    return {
+      kind: "html",
+      message: "HTML editor contains document, style or script markup. Keep HTML only and move CSS or JavaScript into their own editors.",
+    };
+  }
+
+  if (/<\/?(?:style|script|html|head|body)\b|<!doctype/i.test(input.css)) {
+    return {
+      kind: "css",
+      message: "CSS editor contains HTML or JavaScript wrapper markup. Keep CSS only.",
+    };
+  }
+
+  if (/<\/?(?:style|script|html|head|body)\b|<!doctype/i.test(input.js)) {
+    return {
+      kind: "js",
+      message: "JavaScript editor contains HTML or CSS wrapper markup. Keep JavaScript only.",
+    };
+  }
+
+  if (/(?:^|[;\n\r}])\s*\.[_a-zA-Z][\w-]*(?:[\s.#:[\]>+~,_a-zA-Z0-9-]*)\s*\{/.test(input.js)) {
+    return {
+      kind: "js",
+      message: "JavaScript editor appears to contain CSS selectors. Move CSS into the CSS editor before preview or export.",
+    };
+  }
+
+  return null;
 }
 
 function getEditorHint(kind: EditorKind) {
@@ -605,7 +633,7 @@ function LayerTree(props: {
   onActivate: (id: string) => void;
 }) {
   if (props.layers.length === 0) {
-    return <p className="empty-state">Run preview to generate a layer tree.</p>;
+    return <p className="empty-state">No layers yet</p>;
   }
 
   return (
@@ -655,33 +683,31 @@ function Toggle(props: {
 }
 
 export default function JigmaBuilder() {
-  const initialTemplate = templates[0];
-  const initialLayerIds = collectLayerIds(getLayers(initialTemplate.html));
-  const [html, setHtml] = useState(initialTemplate.html);
-  const [css, setCss] = useState(initialTemplate.css);
-  const [js, setJs] = useState(initialTemplate.js);
-  const [activeTemplate, setActiveTemplate] = useState(initialTemplate.key);
+  const [html, setHtml] = useState("");
+  const [css, setCss] = useState("");
+  const [js, setJs] = useState("");
+  const [activeTemplate, setActiveTemplate] = useState("custom");
   const [device, setDevice] = useState<Device>("desktop");
   const [previewWidth, setPreviewWidth] = useState(1280);
   const [options, setOptions] = useState<OutputOptions>(defaultOptions);
   const [preview, setPreview] = useState<PreviewState>({
-    html: initialTemplate.html,
-    css: initialTemplate.css,
-    js: initialTemplate.js,
+    html: "",
+    css: "",
+    js: "",
     runId: 1,
   });
   const [selectedLayerIds, setSelectedLayerIds] = useState<Set<string>>(
-    () => new Set(initialLayerIds),
+    () => new Set(),
   );
   const [deletedLayerIds, setDeletedLayerIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [expandedLayerIds, setExpandedLayerIds] = useState<Set<string>>(
-    () => new Set(initialLayerIds),
+    () => new Set(),
   );
   const [layerHistory, setLayerHistory] = useState<LayerSnapshot[]>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(
-    initialLayerIds[0] ?? null,
+    null,
   );
   const [status, setStatus] = useState("Ready to convert");
   const [messages, setMessages] = useState<EditorMessage[]>([]);
@@ -695,16 +721,20 @@ export default function JigmaBuilder() {
   const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
   const [activeWorkflowTab, setActiveWorkflowTab] = useState<WorkflowTab>("layers");
   const [showAdvancedExport, setShowAdvancedExport] = useState(false);
-  const [savedPresets, setSavedPresets] = useState<LocalJigmaPreset[]>(
-    () => readSavedPresets(),
+  const [savedSections, setSavedSections] = useState<LocalSavedSection[]>(
+    () => readSavedSections(),
   );
-  const [activePresetId, setActivePresetId] = useState("");
+  const [activeSavedSectionId, setActiveSavedSectionId] = useState("");
 
   const layers = useMemo(() => getLayers(preview.html), [preview.html]);
   const allLayerIds = useMemo(() => collectLayerIds(layers), [layers]);
   const dependencies = useMemo(
     () => inspectDependencies(preview.html, preview.css, preview.js),
     [preview.html, preview.css, preview.js],
+  );
+  const sourceSeparationError = useMemo(
+    () => getSourceSeparationError({ html, css, js }),
+    [html, css, js],
   );
   const dependencyGroups = useMemo(() => {
     const labels: Record<string, string> = {
@@ -818,6 +848,7 @@ export default function JigmaBuilder() {
     }
 
     setActiveTemplate("custom");
+    setActiveSavedSectionId("");
   };
 
   const setOption = <K extends keyof OutputOptions>(key: K, value: OutputOptions[K]) => {
@@ -845,18 +876,13 @@ export default function JigmaBuilder() {
       ...current,
       projectPrefix: template.prefix,
       blockName: template.blockName,
+      includeJavaScriptCode: true,
     }));
-    setPreview({
-      html: template.html,
-      css: template.css,
-      js: template.js,
-      runId: preview.runId + 1,
-    });
     setActiveTemplate(template.key);
-    resetLayerState(template.html);
+    setActiveSavedSectionId("");
     setRuntimeErrors([]);
     setMessages([]);
-    setStatus(`${template.name} loaded`);
+    setStatus(`${template.name} loaded. Run Preview to render and execute JavaScript.`);
   };
 
   const resetActiveTemplate = () => {
@@ -876,84 +902,113 @@ export default function JigmaBuilder() {
     setStatus(`${template.name} reset`);
   };
 
-  const saveLocalPreset = () => {
-    const preset = createLocalPreset(options);
-    const nextPresets = upsertLocalPreset(savedPresets, preset);
-    setSavedPresets(nextPresets);
-    setActivePresetId(preset.id);
-    const saved = writeSavedPresets(nextPresets);
-    setStatus(saved ? "Preset saved locally" : "Preset saved for this session");
-  };
+  const saveLocalSection = () => {
+    const fallbackName = activeTemplate === "custom"
+      ? options.blockName || "Untitled section"
+      : templates.find((template) => template.key === activeTemplate)?.name ?? options.blockName;
+    const name = typeof window === "undefined"
+      ? fallbackName
+      : window.prompt("Save section as", fallbackName) ?? "";
 
-  const loadLocalPreset = (presetId: string) => {
-    const preset = savedPresets.find((item) => item.id === presetId);
-    if (!preset) {
-      setActivePresetId("");
+    if (!name.trim()) {
       return;
     }
 
+    const section = createLocalSavedSection(
+      createSavedSectionSource(html, css, js, options),
+      new Date(),
+      name,
+    );
+    const nextSections = upsertSavedSection(savedSections, section);
+    setSavedSections(nextSections);
+    setActiveSavedSectionId(section.id);
+    const saved = writeSavedSections(nextSections);
+    setStatus(saved ? "Section saved locally" : "Section saved for this session");
+  };
+
+  const loadSavedSection = (sectionId: string) => {
+    const section = savedSections.find((item) => item.id === sectionId);
+    if (!section) {
+      setActiveSavedSectionId("");
+      return;
+    }
+
+    setHtml(section.html);
+    setCss(section.css);
+    setJs(section.javascript);
     setOptions((current) => ({
       ...current,
-      projectPrefix: preset.projectPrefix,
-      blockName: preset.blockName,
+      projectPrefix: section.projectPrefix,
+      blockName: section.blockName,
+      includeJavaScriptCode: true,
     }));
-    setActivePresetId(preset.id);
-    setStatus(`${preset.name} loaded`);
+    setPreview((current) => ({
+      html: "",
+      css: "",
+      js: "",
+      runId: current.runId + 1,
+    }));
+    setActiveTemplate("custom");
+    setActiveSavedSectionId(section.id);
+    resetLayerState("");
+    setRuntimeErrors([]);
+    setMessages([]);
+    setStatus(`${section.name} loaded. Run Preview to render it.`);
   };
 
-  const renameSelectedPreset = () => {
-    const preset = savedPresets.find((item) => item.id === activePresetId);
-    if (!preset || typeof window === "undefined") {
+  const renameSelectedSection = () => {
+    const section = savedSections.find((item) => item.id === activeSavedSectionId);
+    if (!section || typeof window === "undefined") {
       return;
     }
 
-    const nextName = window.prompt("Rename preset", preset.name);
+    const nextName = window.prompt("Rename saved section", section.name);
     if (!nextName) {
       return;
     }
 
-    const nextPresets = renameLocalPreset(savedPresets, preset.id, nextName);
-    setSavedPresets(nextPresets);
-    writeSavedPresets(nextPresets);
-    setStatus("Preset renamed");
+    const nextSections = renameSavedSection(savedSections, section.id, nextName);
+    setSavedSections(nextSections);
+    writeSavedSections(nextSections);
+    setStatus("Section renamed");
   };
 
-  const duplicateSelectedPreset = () => {
-    if (!activePresetId) {
+  const duplicateSelectedSection = () => {
+    if (!activeSavedSectionId) {
       return;
     }
 
-    const nextPresets = duplicateLocalPreset(savedPresets, activePresetId);
-    setSavedPresets(nextPresets);
-    writeSavedPresets(nextPresets);
-    setActivePresetId(nextPresets[0]?.id ?? "");
-    setStatus("Preset duplicated");
+    const nextSections = duplicateSavedSection(savedSections, activeSavedSectionId);
+    setSavedSections(nextSections);
+    writeSavedSections(nextSections);
+    setActiveSavedSectionId(nextSections[0]?.id ?? "");
+    setStatus("Section duplicated");
   };
 
-  const deleteSelectedPreset = () => {
-    if (!activePresetId) {
+  const deleteSelectedSection = () => {
+    if (!activeSavedSectionId) {
       return;
     }
 
-    const nextPresets = deleteLocalPreset(savedPresets, activePresetId);
-    setSavedPresets(nextPresets);
-    writeSavedPresets(nextPresets);
-    setActivePresetId("");
-    setStatus("Preset deleted");
+    const nextSections = deleteSavedSection(savedSections, activeSavedSectionId);
+    setSavedSections(nextSections);
+    writeSavedSections(nextSections);
+    setActiveSavedSectionId("");
+    setStatus("Section deleted");
   };
 
-  const exportSelectedPreset = async () => {
-    const preset = savedPresets.find((item) => item.id === activePresetId);
-    if (!preset) {
+  const exportSelectedSection = async () => {
+    const section = savedSections.find((item) => item.id === activeSavedSectionId);
+    if (!section) {
       return;
     }
 
-    const json = exportLocalPresetJson(preset);
+    const json = exportSavedSectionJson(section);
     try {
       await navigator.clipboard.writeText(json);
-      setStatus("Preset JSON copied");
+      setStatus("Saved section JSON copied");
     } catch {
-      setStatus("Preset JSON ready in Advanced output");
+      setStatus("Saved section JSON ready in Advanced output");
       setMessages((current) => [
         ...current,
         { kind: "export", message: json },
@@ -961,30 +1016,36 @@ export default function JigmaBuilder() {
     }
   };
 
-  const importPresetFromJson = () => {
+  const importSectionFromJson = () => {
     if (typeof window === "undefined") {
       return;
     }
 
-    const rawJson = window.prompt("Paste preset JSON");
+    const rawJson = window.prompt("Paste saved section JSON");
     if (!rawJson) {
       return;
     }
 
-    const result = importLocalPresetJson(rawJson);
-    if (!result.valid || !result.preset) {
-      setStatus(result.errors[0] ?? "Preset import failed");
+    const result = importSavedSectionJson(rawJson);
+    if (!result.valid || !result.section) {
+      setStatus(result.errors[0] ?? "Saved section import failed");
       return;
     }
 
-    const nextPresets = upsertLocalPreset(savedPresets, result.preset);
-    setSavedPresets(nextPresets);
-    setActivePresetId(result.preset.id);
-    writeSavedPresets(nextPresets);
-    setStatus("Preset imported");
+    const nextSections = upsertSavedSection(savedSections, result.section);
+    setSavedSections(nextSections);
+    setActiveSavedSectionId(result.section.id);
+    writeSavedSections(nextSections);
+    setStatus("Saved section imported. Load it when ready.");
   };
 
   const runCode = () => {
+    if (sourceSeparationError) {
+      setMessages([sourceSeparationError]);
+      setStatus("Fix source separation before preview");
+      return;
+    }
+
     const nextHtml = sanitizeHtmlInput(html);
     const nextCss = sanitizeCssInput(css);
     const nextJs = sanitizeJsInput(js);
@@ -1149,6 +1210,18 @@ export default function JigmaBuilder() {
   };
 
   const copyBricksStructure = async () => {
+    if (sourceSeparationError) {
+      setMessages([sourceSeparationError]);
+      setStatus("Fix source separation before export");
+      return;
+    }
+
+    if (!preview.html.trim()) {
+      setStatus("Add some HTML before exporting");
+      setMessages([{ kind: "export", message: "Add some HTML before exporting." }]);
+      return;
+    }
+
     try {
       await navigator.clipboard.writeText(bricksJson);
       setStatus("Bricks structure copied");
@@ -1266,6 +1339,17 @@ export default function JigmaBuilder() {
       summary: message,
       suggestedAction: "Review the preview JavaScript or remove custom code before export.",
     })),
+    ...(sourceSeparationError
+      ? [{
+        id: `source-separation:${sourceSeparationError.kind}`,
+        code: "source.separation",
+        severity: "error" as ConversionSeverity,
+        title: "Source separation error",
+        message: sourceSeparationError.message,
+        summary: sourceSeparationError.message,
+        suggestedAction: "Keep HTML, CSS and JavaScript in their matching editors before preview or export.",
+      }]
+      : []),
     ...dependencyWarnings,
   ];
   const groupedConversionIssues = useMemo(
@@ -1284,6 +1368,15 @@ export default function JigmaBuilder() {
   const totalIssueCount = groupedConversionIssues.reduce((total, issue) => total + (issue.count ?? 1), 0);
   const errorCount = severityCounts.error;
   const actionRequiredCount = severityCounts["action-required"];
+  const hasPreviewHtml = preview.html.trim().length > 0;
+  const hasEditorJavaScript = js.trim().length > 0;
+  const hasPreviewJavaScript = preview.js.trim().length > 0;
+  const canCopyBricksStructure = hasPreviewHtml && !sourceSeparationError;
+  const javascriptSummary = hasPreviewJavaScript
+    ? options.includeJavaScriptCode
+      ? "Included as one unsigned Code element"
+      : "Excluded from Bricks export"
+    : "none";
   const statusBadgeLabel = errorCount > 0
     ? `${errorCount} error${errorCount === 1 ? "" : "s"}`
     : actionRequiredCount > 0
@@ -1350,7 +1443,12 @@ export default function JigmaBuilder() {
           <button type="button" className="run-button run-button--top" onClick={runCode}>
             Run Preview
           </button>
-          <button type="button" className="copy-button copy-button--top" onClick={copyBricksStructure}>
+          <button
+            type="button"
+            className="copy-button copy-button--top"
+            disabled={!canCopyBricksStructure}
+            onClick={copyBricksStructure}
+          >
             {outputAdapter.copyLabel}
           </button>
         </div>
@@ -1416,27 +1514,28 @@ export default function JigmaBuilder() {
                 >
                   <span className={`template-thumb template-thumb--${template.thumbnail}`} aria-hidden="true" />
                   <span className="template-card__copy">
-                    <strong>{template.name}</strong>
+                    <strong>{template.id === "jigma-header" ? "Load Header Example" : template.name}</strong>
                     <span>{template.description}</span>
                     <em>{template.category}</em>
                   </span>
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className="secondary-button template-reset-button"
-              disabled={!getTemplateByKey(activeTemplate)}
-              onClick={resetActiveTemplate}
-            >
-              Reset Template
-            </button>
+            {activeTemplate === "jigma-header" && (
+              <button
+                type="button"
+                className="secondary-button template-reset-button"
+                onClick={resetActiveTemplate}
+              >
+                Reset Header Example
+              </button>
+            )}
           </section>
 
           <section className="app-panel settings-panel">
             <div className="panel-heading">
-              <p className="panel__kicker">Current Preset</p>
-              <h2>BEM naming</h2>
+              <p className="panel__kicker">Saved Sections</p>
+              <h2>Local workspace</h2>
             </div>
             <label className="field-group">
               <span>Project Prefix</span>
@@ -1444,7 +1543,7 @@ export default function JigmaBuilder() {
                 type="text"
                 value={options.projectPrefix}
                 onChange={(event) => {
-                  setActivePresetId("");
+                  setActiveSavedSectionId("");
                   setOption(
                     "projectPrefix",
                     (event.currentTarget as HTMLInputElement).value,
@@ -1458,7 +1557,7 @@ export default function JigmaBuilder() {
                 type="text"
                 value={options.blockName}
                 onChange={(event) => {
-                  setActivePresetId("");
+                  setActiveSavedSectionId("");
                   setOption(
                     "blockName",
                     (event.currentTarget as HTMLInputElement).value,
@@ -1470,65 +1569,65 @@ export default function JigmaBuilder() {
             <button
               type="button"
               className="primary-button primary-button--wide"
-              onClick={saveLocalPreset}
+              onClick={saveLocalSection}
             >
-              Save Preset locally
+              Save Section locally
             </button>
             <label className="field-group">
-              <span>Load Preset locally</span>
+              <span>Load Saved Section</span>
               <select
-                value={activePresetId}
-                disabled={savedPresets.length === 0}
-                onChange={(event) => loadLocalPreset(event.currentTarget.value)}
+                value={activeSavedSectionId}
+                disabled={savedSections.length === 0}
+                onChange={(event) => loadSavedSection(event.currentTarget.value)}
               >
                 <option value="">
-                  {savedPresets.length === 0 ? "No saved presets" : "Choose saved preset"}
+                  {savedSections.length === 0 ? "No saved sections" : "Choose saved section"}
                 </option>
-                {savedPresets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.name}
+                {savedSections.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.name}
                   </option>
                 ))}
               </select>
-              <small>Saved in this browser only. No account required.</small>
+              <small>HTML, CSS, JavaScript, prefix and block name stay in this browser only.</small>
             </label>
-            <div className="preset-actions" aria-label="Preset actions">
+            <div className="preset-actions" aria-label="Saved section actions">
               <button
                 type="button"
                 className="secondary-button"
-                disabled={!activePresetId}
-                onClick={renameSelectedPreset}
+                disabled={!activeSavedSectionId}
+                onClick={renameSelectedSection}
               >
                 Rename
               </button>
               <button
                 type="button"
                 className="secondary-button"
-                disabled={!activePresetId}
-                onClick={duplicateSelectedPreset}
+                disabled={!activeSavedSectionId}
+                onClick={duplicateSelectedSection}
               >
                 Duplicate
               </button>
               <button
                 type="button"
                 className="secondary-button"
-                disabled={!activePresetId}
-                onClick={exportSelectedPreset}
+                disabled={!activeSavedSectionId}
+                onClick={exportSelectedSection}
               >
                 Export JSON
               </button>
               <button
                 type="button"
                 className="secondary-button"
-                onClick={importPresetFromJson}
+                onClick={importSectionFromJson}
               >
                 Import JSON
               </button>
               <button
                 type="button"
                 className="secondary-button secondary-button--danger"
-                disabled={!activePresetId}
-                onClick={deleteSelectedPreset}
+                disabled={!activeSavedSectionId}
+                onClick={deleteSelectedSection}
               >
                 Delete
               </button>
@@ -1801,7 +1900,7 @@ export default function JigmaBuilder() {
                 </div>
               </div>
               {dependencies.length === 0 ? (
-                <p className="empty-state">No external dependencies detected.</p>
+                <p className="empty-state">No dependencies detected</p>
               ) : (
                 <div className="dependency-list">
                   {dependencyGroups.map((group) => (
@@ -1837,7 +1936,7 @@ export default function JigmaBuilder() {
                 </div>
               </div>
               {groupedConversionIssues.length === 0 ? (
-                <p className="empty-state">No warnings. Structure is ready to copy.</p>
+                <p className="empty-state">No issues to review</p>
               ) : (
                 <>
                   <div className="warning-filter-grid" aria-label="Warning filters">
@@ -1938,6 +2037,22 @@ export default function JigmaBuilder() {
               </article>
             </section>
 
+            {!hasPreviewHtml && (
+              <p className="empty-state">Add some HTML before exporting.</p>
+            )}
+
+            <div className="export-js-control">
+              <Toggle
+                label="Include JavaScript in Bricks"
+                checked={Boolean(options.includeJavaScriptCode)}
+                disabled={!hasEditorJavaScript}
+                onChange={(checked) => setOption("includeJavaScriptCode", checked)}
+                note={hasEditorJavaScript
+                  ? "Creates one unsigned Bricks Code element with execution disabled."
+                  : "JavaScript: none"}
+              />
+            </div>
+
             <dl className="export-summary">
               <div>
                 <dt>Elements</dt>
@@ -1984,6 +2099,18 @@ export default function JigmaBuilder() {
                 <dd>{bricksExport.validation.unsignedSvgCodeCount + bricksExport.validation.unsignedJavaScriptCodeCount}</dd>
               </div>
               <div>
+                <dt>JavaScript</dt>
+                <dd>{javascriptSummary}</dd>
+              </div>
+              <div>
+                <dt>Signature</dt>
+                <dd>{hasPreviewJavaScript && options.includeJavaScriptCode ? "Required after import" : "none"}</dd>
+              </div>
+              <div>
+                <dt>Execution</dt>
+                <dd>{hasPreviewJavaScript && options.includeJavaScriptCode ? "Disabled" : "none"}</dd>
+              </div>
+              <div>
                 <dt>Failed assets</dt>
                 <dd>{bricksExport.validation.failedAssetCount ?? 0}</dd>
               </div>
@@ -1997,7 +2124,12 @@ export default function JigmaBuilder() {
               </div>
             </dl>
 
-            <button type="button" className="copy-button copy-button--wide" onClick={copyBricksStructure}>
+            <button
+              type="button"
+              className="copy-button copy-button--wide"
+              disabled={!canCopyBricksStructure}
+              onClick={copyBricksStructure}
+            >
               {outputAdapter.copyLabel}
             </button>
             <div className="export-actions">
@@ -2041,13 +2173,6 @@ export default function JigmaBuilder() {
                   checked={options.includeExternalCss}
                   onChange={(checked) => setOption("includeExternalCss", checked)}
                 />
-                <Toggle
-                  label="Include JavaScript as unsigned Code element"
-                  checked={false}
-                  onChange={() => undefined}
-                  disabled
-                  note="Disabled for MVP. JavaScript stays review-required."
-                />
               </div>
               <section className="advanced-output-block">
                 <p>Diagnostic class audit</p>
@@ -2064,7 +2189,12 @@ export default function JigmaBuilder() {
         <button type="button" className="run-button" onClick={runCode}>
           Run Preview
         </button>
-        <button type="button" className="copy-button" onClick={copyBricksStructure}>
+        <button
+          type="button"
+          className="copy-button"
+          disabled={!canCopyBricksStructure}
+          onClick={copyBricksStructure}
+        >
           Copy Structure
         </button>
       </div>

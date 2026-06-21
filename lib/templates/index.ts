@@ -16,7 +16,6 @@ export {
 
 export const templateSources = [
   jigmaHeaderTemplate,
-  jigmaHeroTemplate,
 ];
 
 export const templates: JigmaTemplate[] = templateSources.map((source) => template(source));

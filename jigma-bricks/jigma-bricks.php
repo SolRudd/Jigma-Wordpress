@@ -593,6 +593,25 @@ function jigma_bricks_insert_generated_elements(): void {
 	}
 
 	$include_js_code  = ! empty( $_POST['includeJsCode'] );
+	$code_warnings     = array();
+	if ( $include_js_code ) {
+		foreach ( $payload['content'] as $incoming_element ) {
+			if (
+				is_array( $incoming_element ) &&
+				isset( $incoming_element['name'], $incoming_element['settings'] ) &&
+				'code' === $incoming_element['name'] &&
+				is_array( $incoming_element['settings'] ) &&
+				(
+					! empty( $incoming_element['settings']['javascriptCode'] ) ||
+					! empty( $incoming_element['settings']['javascript'] ) ||
+					! empty( $incoming_element['settings']['js'] )
+				)
+			) {
+				$code_warnings[] = __( 'JavaScript signature required. This section contains one unsigned Bricks Code element. Review and sign it inside Bricks before enabling execution.', 'jigma-bricks' );
+				break;
+			}
+		}
+	}
 	$current_content  = jigma_bricks_get_current_content( $post_id );
 	$current_classes  = jigma_bricks_get_current_global_classes();
 	$class_warnings   = array();
@@ -658,6 +677,7 @@ function jigma_bricks_insert_generated_elements(): void {
 			'insertedCount' => count( $new_elements ),
 			'globalClasses' => count( $class_merge['classes'] ),
 			'classWarnings' => $class_warnings,
+			'codeWarnings'  => $code_warnings,
 			'totalCount'    => count( $updated_content ),
 			'metaKey'       => jigma_bricks_get_content_meta_key(),
 			'cssRegenerated' => $css_regenerated,
