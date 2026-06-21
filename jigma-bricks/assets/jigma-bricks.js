@@ -720,6 +720,13 @@
     }).join("\n");
   }
 
+  function formatLiteralCssRule(selector, declarations, media) {
+    var block = selector + " {\n" + declarations + "\n}";
+    return media
+      ? "@media " + media + " {\n  " + block.replace(/\n/g, "\n  ") + "\n}"
+      : block;
+  }
+
   function splitCssValue(value) {
     var parts = [];
     var current = "";
@@ -949,6 +956,8 @@
         nativeSettingsCount: Object.keys(globalClass.settings).filter(function (key) {
           return key !== BRICKS_ELEMENT_CUSTOM_CSS_FIELD;
         }).length,
+        fallbackCssRuleCount: 0,
+        fallbackStrategy: "none",
         customCssPresent: typeof customCss === "string" && customCss.trim().length > 0,
         missingReferences: [],
         conflicts: [],
@@ -969,6 +978,8 @@
             classId: String(classId),
             assignedElementIds: [element.id],
             nativeSettingsCount: 0,
+            fallbackCssRuleCount: 0,
+            fallbackStrategy: "none",
             customCssPresent: false,
             missingReferences: [String(classId)],
             conflicts: ["Element references a class ID that is missing from globalClasses."],
@@ -986,13 +997,13 @@
     var unmapped = 0;
     var native = 0;
     var fallback = 0;
-    var cssByClass = new Map();
+    var literalFallbackBlocks = [];
+    var literalFallbackKeys = new Set();
     var sourceMap = sourceClassTargets(targets);
     var classByName = new Map();
 
     globalClasses.forEach(function (globalClass) {
       classByName.set(globalClass.name, globalClass);
-      cssByClass.set(globalClass.name, []);
     });
 
     rules.forEach(function (rule) {
@@ -1032,17 +1043,12 @@
         }
 
         var formattedDeclarations = formatCssDeclarations(fallbackDeclarations);
-        var block = targetSelector.pseudo
-          ? "%root%" + targetSelector.pseudo + " {\n" + formattedDeclarations + "\n}"
-          : "%root% {\n" + formattedDeclarations + "\n}";
-
-        if (rule.media) {
-          block = "@media " + rule.media + " {\n  " + block.replace(/\n/g, "\n  ") + "\n}";
-        }
-
-        var blocks = cssByClass.get(globalClass.name);
-        if (blocks.indexOf(block) === -1) {
-          blocks.push(block);
+        var fallbackSelector = "." + globalClass.name + (targetSelector.pseudo || "");
+        var block = formatLiteralCssRule(fallbackSelector, formattedDeclarations, rule.media);
+        var blockKey = fallbackSelector + "\n" + (rule.media || "") + "\n" + formattedDeclarations;
+        if (!literalFallbackKeys.has(blockKey)) {
+          literalFallbackKeys.add(blockKey);
+          literalFallbackBlocks.push(block);
           fallback += fallbackDeclarations.length;
           attached += 1;
         }
@@ -1054,13 +1060,6 @@
       }
     });
 
-    globalClasses.forEach(function (globalClass) {
-      var blocks = cssByClass.get(globalClass.name) || [];
-      if (blocks.length > 0) {
-        globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] = blocks.join("\n\n");
-      }
-    });
-
     if (unmapped > 0) {
       warnings.push({
         severity: "warning",
@@ -1068,7 +1067,14 @@
       });
     }
 
-    return { attached: attached, unmapped: unmapped, native: native, fallback: fallback };
+    return {
+      attached: attached,
+      unmapped: unmapped,
+      native: native,
+      fallback: fallback,
+      literalFallbackCss: literalFallbackBlocks.join("\n\n"),
+      literalFallbackRuleCount: literalFallbackBlocks.length,
+    };
   }
 
   function inspectDependencies(html, css, js) {
@@ -1157,6 +1163,21 @@
     var cssResult = attachCss(state.css, built.targets, globalClasses, warnings);
     var optionalCodeElement = null;
 
+    if (cssResult.literalFallbackCss) {
+      built.content.push({
+        id: hash("jigma-component-styles:" + cssResult.literalFallbackCss.slice(0, 120)),
+        name: "code",
+        parent: 0,
+        children: [],
+        settings: {
+          executeCode: false,
+          css: cssResult.literalFallbackCss,
+          cssCode: cssResult.literalFallbackCss,
+        },
+        label: "Jigma Component Styles",
+      });
+    }
+
     if (state.js.trim() && state.includeJsCode) {
       optionalCodeElement = {
         id: hash("jigma-js-review:" + state.js.slice(0, 120)),
@@ -1188,7 +1209,7 @@
         notes: [
           "Generated inside the Bricks builder environment.",
           "BEM classes are created as native editable Bricks classes.",
-          "Matching CSS declarations use Bricks %root% custom CSS on each class record.",
+          "Matching CSS declarations use native Bricks class settings with literal BEM fallback CSS for unsupported rules.",
           state.includeJsCode
             ? "JavaScript is included as a disabled Code element for manual Bricks review."
             : "JavaScript and external dependencies require manual Bricks review.",
@@ -1214,6 +1235,8 @@
         unusedSelectorCount: 0,
         nativeStyleMappedCount: cssResult.native,
         customCssFallbackCount: cssResult.fallback,
+        literalFallbackRuleCount: cssResult.literalFallbackRuleCount,
+        classFallbackStrategy: cssResult.literalFallbackCss ? "literal-bem" : "none",
         classReferenceValid: classAudit.missing === 0,
         missingClassReferenceCount: classAudit.missing,
         duplicateClassIdCount: 0,

@@ -448,7 +448,20 @@ function jigma_bricks_normalize_elements_for_insert( array $incoming_elements, a
 			$name = 'div';
 		}
 
-		if ( 'code' === $name && ! $include_js_code ) {
+		$element_settings = isset( $element['settings'] ) && is_array( $element['settings'] )
+			? $element['settings']
+			: array();
+		$has_css_code     = 'code' === $name && (
+			! empty( $element_settings['css'] ) ||
+			! empty( $element_settings['cssCode'] )
+		);
+		$has_js_code      = 'code' === $name && (
+			! empty( $element_settings['javascriptCode'] ) ||
+			! empty( $element_settings['javascript'] ) ||
+			! empty( $element_settings['js'] )
+		);
+
+		if ( 'code' === $name && $has_js_code && ! $has_css_code && ! $include_js_code ) {
 			continue;
 		}
 
@@ -469,10 +482,6 @@ function jigma_bricks_normalize_elements_for_insert( array $incoming_elements, a
 			$name = 'div';
 		}
 
-		if ( 'code' === $name && ! $include_js_code ) {
-			continue;
-		}
-
 		$old_parent = isset( $element['parent'] ) ? (string) $element['parent'] : '0';
 		$children   = isset( $element['children'] ) && is_array( $element['children'] )
 			? $element['children']
@@ -483,16 +492,39 @@ function jigma_bricks_normalize_elements_for_insert( array $incoming_elements, a
 			: array();
 		$settings = jigma_bricks_remap_global_class_ids( $settings, $global_class_id_map );
 
+		$has_css_code = 'code' === $name && (
+			! empty( $settings['css'] ) ||
+			! empty( $settings['cssCode'] )
+		);
+		$has_js_code  = 'code' === $name && (
+			! empty( $settings['javascriptCode'] ) ||
+			! empty( $settings['javascript'] ) ||
+			! empty( $settings['js'] )
+		);
+
+		if ( 'code' === $name && $has_js_code && ! $has_css_code && ! $include_js_code ) {
+			continue;
+		}
+
 		if ( 'code' === $name ) {
 			$code_class = isset( $settings['_cssClasses'] ) ? $settings['_cssClasses'] : '';
-			$js_code    = isset( $settings['javascriptCode'] ) ? $settings['javascriptCode'] : '';
+			$css_code   = isset( $settings['css'] ) ? $settings['css'] : ( $settings['cssCode'] ?? '' );
+			$js_code    = isset( $settings['javascriptCode'] ) ? $settings['javascriptCode'] : ( $settings['javascript'] ?? ( $settings['js'] ?? '' ) );
 			$settings   = array(
-				'executeCode'    => false,
-				'javascriptCode' => $js_code,
+				'executeCode' => false,
 			);
 
 			if ( '' !== $code_class ) {
 				$settings['_cssClasses'] = $code_class;
+			}
+
+			if ( '' !== $css_code ) {
+				$settings['css']     = $css_code;
+				$settings['cssCode'] = $css_code;
+			}
+
+			if ( '' !== $js_code && $include_js_code ) {
+				$settings['javascriptCode'] = $js_code;
 			}
 		} else {
 			unset(

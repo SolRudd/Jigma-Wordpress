@@ -26,14 +26,19 @@ export interface ElementCssResult {
   nativeStyleMappedCount: number;
   customCssFallbackCount: number;
   blockScopedFallbackCount: number;
+  literalFallbackRuleCount: number;
   responsiveRuleCount: number;
   pseudoRuleCount: number;
   unresolvedSelectorCount: number;
   styledClassIds: Set<string>;
+  fallbackCss?: string;
+  fallbackStrategy?: "bricks-class-root" | "literal-bem" | "none";
+  fallbackRuleCountByClassName?: Map<string, number>;
 }
 
 export interface ElementCssOptions {
   minify?: boolean;
+  classFallbackStrategy?: "bricks-class-root" | "literal-bem";
 }
 
 interface CssBlock {
@@ -152,6 +157,27 @@ function formatMediaDeclarations(
   }
 
   return `${mediaSelector} {\n${indent(formatRootDeclarations(declarations, rootSuffix), 2)}\n}`;
+}
+
+function formatLiteralDeclarations(selector: string, declarations: string, minify = false) {
+  if (minify) {
+    return `${selector}{${minifyDeclarations(declarations)}}`;
+  }
+
+  return `${selector} {\n${indent(declarations, 2)}\n}`;
+}
+
+function formatLiteralAtRule(
+  atRuleSelector: string,
+  selector: string,
+  declarations: string,
+  minify = false,
+) {
+  if (minify) {
+    return `${atRuleSelector}{${formatLiteralDeclarations(selector, declarations, true)}}`;
+  }
+
+  return `${atRuleSelector} {\n${indent(formatLiteralDeclarations(selector, declarations), 2)}\n}`;
 }
 
 function getExistingElementCss(element: BricksElement) {
@@ -1051,6 +1077,36 @@ function mapSelectorToGeneratedBem(
   return ownerReplaced ? mappedSelector : `%root% ${mappedSelector}`;
 }
 
+function mapSelectorToLiteralBem(
+  selector: string,
+  classMap: Map<string, Set<ClassCssTarget>>,
+  idMap: Map<string, Set<ClassCssTarget>>,
+) {
+  let unresolved = false;
+  const mappedSelector = selector
+    .replace(/\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)/g, (match, className: string) => {
+      const target = getPreferredClassTarget(className, classMap);
+      if (!target) {
+        unresolved = true;
+        return match;
+      }
+
+      return `.${target.className}`;
+    })
+    .replace(/#(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)/g, (match, id: string) => {
+      const matches = idMap.get(id);
+      const target = matches && matches.size > 0 ? [...matches][0] : null;
+      if (!target) {
+        unresolved = true;
+        return match;
+      }
+
+      return `.${target.className}`;
+    });
+
+  return unresolved ? null : mappedSelector;
+}
+
 function scopedSelectorSuffix(scopedSelector: string) {
   return scopedSelector.startsWith("%root%")
     ? scopedSelector.slice("%root%".length)
@@ -1235,10 +1291,12 @@ export function attachCssToElements(
     nativeStyleMappedCount: 0,
     customCssFallbackCount,
     blockScopedFallbackCount: 0,
+    literalFallbackRuleCount: 0,
     responsiveRuleCount,
     pseudoRuleCount,
     unresolvedSelectorCount: unmappedRuleCount,
     styledClassIds: new Set(),
+    fallbackStrategy: "none",
   };
 }
 
@@ -1252,12 +1310,17 @@ export function attachCssToGlobalClasses(
   const idMap = new Map<string, Set<ClassCssTarget>>();
   const targetByClassName = new Map<string, ClassCssTarget>();
   const attachmentBuckets = new Map<ClassCssTarget, ClassCssBucket>();
+  const literalFallbackBlocks: string[] = [];
+  const literalFallbackKeys = new Set<string>();
+  const fallbackRuleCountByClassName = new Map<string, number>();
+  const classFallbackStrategy = options.classFallbackStrategy ?? "literal-bem";
   let attachedRuleCount = 0;
   let unmappedRuleCount = 0;
   let pseudoSelectorCount = 0;
   let nativeStyleMappedCount = 0;
   let customCssFallbackCount = 0;
   let blockScopedFallbackCount = 0;
+  let literalFallbackRuleCount = 0;
   let responsiveRuleCount = 0;
   let pseudoRuleCount = 0;
   const keyframesByName = new Map<string, string>();
@@ -1298,10 +1361,77 @@ export function attachCssToGlobalClasses(
     attachmentBuckets.set(target, bucket);
   };
 
+  const incrementFallbackRuleCount = (target: ClassCssTarget) => {
+    fallbackRuleCountByClassName.set(
+      target.className,
+      (fallbackRuleCountByClassName.get(target.className) ?? 0) + 1,
+    );
+    literalFallbackRuleCount += 1;
+  };
+
+  const addLiteralFallback = (
+    target: ClassCssTarget,
+    selector: string,
+    declarations: string,
+    mediaSelector?: string,
+  ) => {
+    const cssBlock = mediaSelector
+      ? formatLiteralAtRule(mediaSelector, selector, declarations, options.minify)
+      : formatLiteralDeclarations(selector, declarations, options.minify);
+    const key = `${mediaSelector ?? ""}\n${selector}\n${declarations}`;
+
+    if (literalFallbackKeys.has(key)) {
+      return;
+    }
+
+    literalFallbackKeys.add(key);
+    literalFallbackBlocks.push(cssBlock);
+    incrementFallbackRuleCount(target);
+  };
+
+  const addLiteralRawFallback = (
+    target: ClassCssTarget,
+    rawCss: string,
+  ) => {
+    const key = `raw\n${rawCss.trim()}`;
+    if (literalFallbackKeys.has(key)) {
+      return;
+    }
+
+    literalFallbackKeys.add(key);
+    literalFallbackBlocks.push(rawCss.trim());
+    incrementFallbackRuleCount(target);
+  };
+
+  const addClassFallback = (
+    target: ClassCssTarget,
+    declarations: string,
+    rootSuffix: string,
+    mediaSelector?: string,
+    literalSelector?: string,
+  ) => {
+    if (classFallbackStrategy === "bricks-class-root") {
+      addDeclarations(target, declarations, rootSuffix, mediaSelector);
+      return;
+    }
+
+    addLiteralFallback(
+      target,
+      literalSelector ?? `.${target.className}${rootSuffix}`,
+      declarations,
+      mediaSelector,
+    );
+  };
+
   const addRawCss = (
     target: ClassCssTarget,
     rawCss: string,
   ) => {
+    if (classFallbackStrategy === "literal-bem") {
+      addLiteralRawFallback(target, rawCss);
+      return;
+    }
+
     const bucket = attachmentBuckets.get(target) ?? {
       root: new Map<string, string[]>(),
       media: new Map<string, Map<string, string[]>>(),
@@ -1334,7 +1464,7 @@ export function attachCssToGlobalClasses(
         processBlocks(block.body, block.selector);
         pushWarning(
           warnings,
-          `At-rule "${block.selector}" was preserved in class Custom CSS where native mapping was unavailable.`,
+          `At-rule "${block.selector}" was preserved in class-owned fallback CSS where native mapping was unavailable.`,
           "info",
         );
         return;
@@ -1359,7 +1489,7 @@ export function attachCssToGlobalClasses(
           blockScopedFallbackCount += 1;
           pushWarning(
             warnings,
-            `Keyframes "${name}" were preserved once in custom CSS on ${rootTarget.className}.`,
+            `Keyframes "${name}" were preserved once in class-owned fallback CSS for ${rootTarget.className}.`,
             "info",
           );
         }
@@ -1390,7 +1520,7 @@ export function attachCssToGlobalClasses(
           blockScopedFallbackCount += 1;
           pushWarning(
             warnings,
-            `Unsupported at-rule "${block.selector}" was preserved in custom CSS on ${rootTarget.className}; fidelity may differ.`,
+            `Unsupported at-rule "${block.selector}" was preserved in class-owned fallback CSS for ${rootTarget.className}; fidelity may differ.`,
           );
         } else {
           unmappedRuleCount += 1;
@@ -1430,11 +1560,22 @@ export function attachCssToGlobalClasses(
           }
 
           const scopedSelector = mapSelectorToGeneratedBem(selector, owner, classMap);
-          addDeclarations(
+          const literalSelector = mapSelectorToLiteralBem(selector, classMap, idMap);
+          if (!literalSelector) {
+            unmappedRuleCount += 1;
+            pushWarning(
+              warnings,
+              `Selector "${selector}" could not be rewritten to generated BEM fallback CSS.`,
+            );
+            return;
+          }
+
+          addClassFallback(
             owner,
             declarations.map(formatDeclaration).join("\n"),
             scopedSelectorSuffix(scopedSelector),
             mediaSelector,
+            literalSelector,
           );
           customCssFallbackCount += declarations.length;
           blockScopedFallbackCount += 1;
@@ -1483,17 +1624,28 @@ export function attachCssToGlobalClasses(
           });
 
           if (fallbackDeclarations.length > 0) {
-            addDeclarations(
+            const literalSelector = mapSelectorToLiteralBem(selector, classMap, idMap);
+            if (!literalSelector) {
+              unmappedRuleCount += 1;
+              pushWarning(
+                warnings,
+                `Selector "${selector}" could not be rewritten to generated BEM fallback CSS.`,
+              );
+              return;
+            }
+
+            addClassFallback(
               target,
               fallbackDeclarations.map(formatDeclaration).join("\n"),
               pseudo.suffix,
               mediaSelector,
+              literalSelector,
             );
             customCssFallbackCount += fallbackDeclarations.length;
             fallbackDeclarations.forEach((declaration) => {
               pushWarning(
                 warnings,
-                `"${declaration.property}" from "${selector}" was preserved in custom CSS on "${target.className}".`,
+                `"${declaration.property}" from "${selector}" was preserved in class-owned fallback CSS for "${target.className}".`,
                 "info",
               );
             });
@@ -1528,9 +1680,17 @@ export function attachCssToGlobalClasses(
     nativeStyleMappedCount,
     customCssFallbackCount,
     blockScopedFallbackCount,
+    literalFallbackRuleCount,
     responsiveRuleCount,
     pseudoRuleCount,
     unresolvedSelectorCount: unmappedRuleCount,
     styledClassIds,
+    fallbackCss: literalFallbackBlocks.join("\n\n"),
+    fallbackStrategy: classFallbackStrategy === "literal-bem" && literalFallbackBlocks.length > 0
+      ? "literal-bem"
+      : classFallbackStrategy === "bricks-class-root" && attachmentBuckets.size > 0
+      ? "bricks-class-root"
+      : "none",
+    fallbackRuleCountByClassName,
   };
 }

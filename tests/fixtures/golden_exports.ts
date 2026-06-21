@@ -11,6 +11,7 @@ export interface GoldenExportFixture {
     svgLabels: string[];
     nativeStyleMappedCount: number;
     customCssFallbackCount: number;
+    literalFallbackRuleCount: number;
     responsiveRuleCount: number;
     pseudoRuleCount: number;
     cssAttachedRuleCount: number;
@@ -25,7 +26,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
     templateId: "jigma-hero",
     templateName: "Jigma Hero",
     expected: {
-      elementCount: 25,
+      elementCount: 26,
       classCount: 20,
       rootClass: "jg-hero",
       rootClassId: "jukl6j",
@@ -43,6 +44,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
       svgLabels: [],
       nativeStyleMappedCount: 118,
       customCssFallbackCount: 10,
+      literalFallbackRuleCount: 6,
       responsiveRuleCount: 1,
       pseudoRuleCount: 0,
       cssAttachedRuleCount: 34,
@@ -55,7 +57,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
     templateId: "proof-bar",
     templateName: "Proof Bar",
     expected: {
-      elementCount: 17,
+      elementCount: 18,
       classCount: 9,
       rootClass: "jg-proof",
       rootClassId: "o3yh9z",
@@ -73,6 +75,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
       svgLabels: [],
       nativeStyleMappedCount: 57,
       customCssFallbackCount: 25,
+      literalFallbackRuleCount: 3,
       responsiveRuleCount: 1,
       pseudoRuleCount: 1,
       cssAttachedRuleCount: 22,
@@ -85,7 +88,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
     templateId: "services",
     templateName: "Services",
     expected: {
-      elementCount: 18,
+      elementCount: 19,
       classCount: 10,
       rootClass: "jg-services",
       rootClassId: "j200nu",
@@ -103,6 +106,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
       svgLabels: [],
       nativeStyleMappedCount: 72,
       customCssFallbackCount: 3,
+      literalFallbackRuleCount: 1,
       responsiveRuleCount: 1,
       pseudoRuleCount: 0,
       cssAttachedRuleCount: 20,
@@ -115,7 +119,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
     templateId: "product-showcase",
     templateName: "iPhone/Product Showcase",
     expected: {
-      elementCount: 15,
+      elementCount: 16,
       classCount: 15,
       rootClass: "jg-product",
       rootClassId: "tgq3um",
@@ -133,6 +137,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
       svgLabels: [],
       nativeStyleMappedCount: 54,
       customCssFallbackCount: 7,
+      literalFallbackRuleCount: 4,
       responsiveRuleCount: 1,
       pseudoRuleCount: 0,
       cssAttachedRuleCount: 17,
@@ -145,7 +150,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
     templateId: "pricing",
     templateName: "Pricing",
     expected: {
-      elementCount: 16,
+      elementCount: 17,
       classCount: 13,
       rootClass: "jg-pricing",
       rootClassId: "jqwkz3",
@@ -163,6 +168,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
       svgLabels: [],
       nativeStyleMappedCount: 73,
       customCssFallbackCount: 3,
+      literalFallbackRuleCount: 2,
       responsiveRuleCount: 1,
       pseudoRuleCount: 0,
       cssAttachedRuleCount: 20,
@@ -175,7 +181,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
     templateId: "testimonials",
     templateName: "Testimonials",
     expected: {
-      elementCount: 15,
+      elementCount: 16,
       classCount: 10,
       rootClass: "jg-testimonials",
       rootClassId: "j3719f",
@@ -199,6 +205,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
       svgLabels: [],
       nativeStyleMappedCount: 44,
       customCssFallbackCount: 1,
+      literalFallbackRuleCount: 1,
       responsiveRuleCount: 1,
       pseudoRuleCount: 0,
       cssAttachedRuleCount: 12,
@@ -211,7 +218,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
     templateId: "cta",
     templateName: "CTA",
     expected: {
-      elementCount: 6,
+      elementCount: 7,
       classCount: 6,
       rootClass: "jg-cta",
       rootClassId: "b658zn",
@@ -227,6 +234,7 @@ export const goldenExportFixtures: GoldenExportFixture[] = [
       svgLabels: [],
       nativeStyleMappedCount: 34,
       customCssFallbackCount: 3,
+      literalFallbackRuleCount: 3,
       responsiveRuleCount: 1,
       pseudoRuleCount: 0,
       cssAttachedRuleCount: 8,

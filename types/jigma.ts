@@ -188,6 +188,8 @@ export interface BricksExportValidation {
   nativeStyleMappedCount: number;
   customCssFallbackCount: number;
   blockScopedFallbackCount: number;
+  literalFallbackRuleCount: number;
+  classFallbackStrategy: "bricks-class-root" | "literal-bem" | "none";
   responsiveRuleCount: number;
   pseudoRuleCount: number;
   unresolvedSelectorCount: number;
@@ -200,6 +202,8 @@ export interface BricksExportValidation {
   duplicateClassIdCount: number;
   duplicateClassNameCount: number;
   emptyStyledClassCount: number;
+  fallbackCssMissingClassSelectorCount: number;
+  fallbackCssElementIdSelectorCount: number;
   dependencyWarningCount: number;
   jsWarningCount: number;
   nativeImageCount?: number;
@@ -214,6 +218,8 @@ export interface BricksClassAuditEntry {
   classId: string;
   assignedElementIds: string[];
   nativeSettingsCount: number;
+  fallbackCssRuleCount: number;
+  fallbackStrategy: "bricks-class-root" | "literal-bem" | "none";
   customCssPresent: boolean;
   missingReferences: string[];
   conflicts: string[];

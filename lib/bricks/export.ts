@@ -429,6 +429,8 @@ function auditBricksClassReferences(
   content: BricksElement[],
   globalClasses: BricksGlobalClass[],
   styledClassIds: Set<string>,
+  fallbackRuleCountByClassName: Map<string, number> = new Map(),
+  fallbackStrategy: BricksClassAuditEntry["fallbackStrategy"] = "none",
 ) {
   const classById = new Map<string, BricksGlobalClass>();
   const entriesById = new Map<string, BricksClassAuditEntry>();
@@ -451,6 +453,8 @@ function auditBricksClassReferences(
       classId: globalClass.id,
       assignedElementIds: [],
       nativeSettingsCount: getNativeSettingCount(globalClass.settings),
+      fallbackCssRuleCount: fallbackRuleCountByClassName.get(globalClass.name) ?? 0,
+      fallbackStrategy: fallbackRuleCountByClassName.has(globalClass.name) ? fallbackStrategy : "none",
       customCssPresent: typeof globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] === "string" &&
         `${globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD]}`.trim().length > 0,
       missingReferences: [],
@@ -490,6 +494,8 @@ function auditBricksClassReferences(
           classId,
           assignedElementIds: [element.id],
           nativeSettingsCount: 0,
+          fallbackCssRuleCount: 0,
+          fallbackStrategy: "none",
           customCssPresent: false,
           missingReferences: [classId],
           conflicts: [`Element "${element.id}" references a class ID that is missing from globalClasses.`],
@@ -523,6 +529,7 @@ function auditBricksClassReferences(
 
     if (
       getNativeSettingCount(globalClass.settings) === 0 &&
+      (fallbackRuleCountByClassName.get(globalClass.name) ?? 0) === 0 &&
       !(typeof globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] === "string" &&
         globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD].trim())
     ) {
@@ -546,6 +553,37 @@ function auditBricksClassReferences(
     duplicateClassNameCount,
     emptyStyledClassCount,
     generatedClassOnlyInElementClassesCount,
+  };
+}
+
+function auditLiteralFallbackCss(fallbackCss: string, globalClasses: BricksGlobalClass[]) {
+  const managedClassNames = new Set(globalClasses.map((entry) => entry.name));
+  const missingClassNames = new Set<string>();
+  let elementIdSelectorCount = 0;
+
+  fallbackCss.split("\n").forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.endsWith("{") || trimmed.startsWith("@") || /^\d/.test(trimmed)) {
+      return;
+    }
+
+    const selector = trimmed.slice(0, -1).trim();
+    const classMatches = selector.matchAll(/\.(-?[_a-zA-Z]+[_a-zA-Z0-9-]*)/g);
+    for (const match of classMatches) {
+      const className = match[1];
+      if (!managedClassNames.has(className)) {
+        missingClassNames.add(className);
+      }
+    }
+
+    if (/#-?[_a-zA-Z]+[_a-zA-Z0-9-]*/.test(selector)) {
+      elementIdSelectorCount += 1;
+    }
+  });
+
+  return {
+    missingClassSelectorCount: missingClassNames.size,
+    elementIdSelectorCount,
   };
 }
 
@@ -891,10 +929,14 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       nativeStyleMappedCount: 0,
       customCssFallbackCount: 0,
       blockScopedFallbackCount: 0,
+      literalFallbackRuleCount: 0,
       responsiveRuleCount: 0,
       pseudoRuleCount: 0,
       unresolvedSelectorCount: 0,
       styledClassIds: new Set<string>(),
+      fallbackCss: "",
+      fallbackStrategy: "none" as const,
+      fallbackRuleCountByClassName: new Map<string, number>(),
     };
   elementCss.warnings.forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
 
@@ -937,10 +979,14 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       nativeStyleMappedCount: 0,
       customCssFallbackCount: 0,
       blockScopedFallbackCount: 0,
+      literalFallbackRuleCount: 0,
       responsiveRuleCount: 0,
       pseudoRuleCount: 0,
       unresolvedSelectorCount: 0,
       styledClassIds: new Set<string>(),
+      fallbackCss: "",
+      fallbackStrategy: "none" as const,
+      fallbackRuleCountByClassName: new Map<string, number>(),
     };
   classCss.warnings.forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
 
@@ -952,7 +998,13 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   }
 
   const classAudit = shouldCreateGlobalClasses
-    ? auditBricksClassReferences(content, globalClasses, classCss.styledClassIds)
+    ? auditBricksClassReferences(
+      content,
+      globalClasses,
+      classCss.styledClassIds,
+      classCss.fallbackRuleCountByClassName,
+      classCss.fallbackStrategy,
+    )
     : {
       entries: [],
       valid: true,
@@ -975,6 +1027,15 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     pushWarning(
       warnings,
       "One or more generated Bricks classes were found in _cssClasses instead of native _cssGlobalClasses.",
+      "error",
+    );
+  }
+
+  const fallbackCssAudit = auditLiteralFallbackCss(classCss.fallbackCss ?? "", globalClasses);
+  if (fallbackCssAudit.missingClassSelectorCount > 0 || fallbackCssAudit.elementIdSelectorCount > 0) {
+    pushWarning(
+      warnings,
+      "Literal BEM fallback CSS failed ownership validation. Review fallback selectors before paste testing.",
       "error",
     );
   }
@@ -1003,6 +1064,14 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       executeCode: false,
       css: scopedCss.css,
       cssCode: scopedCss.css,
+    }));
+  }
+
+  if (shouldCreateNativeBemClasses && classCss.fallbackCss?.trim()) {
+    content.push(makeCodeElement("jigma-component-styles", "Jigma Component Styles", {
+      executeCode: false,
+      css: classCss.fallbackCss,
+      cssCode: classCss.fallbackCss,
     }));
   }
 
@@ -1075,7 +1144,9 @@ export function createBricksExport(input: ConversionInput): BricksExport {
         shouldCreateScopedCssBlock
           ? "CSS was exported as a scoped generated CSS block."
           : shouldCreateNativeBemClasses
-          ? "Matching CSS declarations are owned by generated Bricks class records."
+          ? classCss.fallbackCss?.trim()
+            ? "Matching CSS declarations are owned by generated Bricks class records with one literal BEM fallback stylesheet for unsupported CSS."
+            : "Matching CSS declarations are owned by generated Bricks class records."
           : shouldAttachElementCss
           ? "Matching CSS declarations were attached directly to exported elements."
           : "CSS output was disabled for structure-only export.",
@@ -1104,6 +1175,8 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       customCssFallbackCount: elementCss.customCssFallbackCount + classCss.customCssFallbackCount +
         (shouldCreateScopedCssBlock && scopedCss.css.trim() ? 1 : 0),
       blockScopedFallbackCount: elementCss.blockScopedFallbackCount + classCss.blockScopedFallbackCount,
+      literalFallbackRuleCount: elementCss.literalFallbackRuleCount + classCss.literalFallbackRuleCount,
+      classFallbackStrategy: classCss.fallbackStrategy ?? "none",
       responsiveRuleCount: elementCss.responsiveRuleCount + classCss.responsiveRuleCount,
       pseudoRuleCount: elementCss.pseudoRuleCount + classCss.pseudoRuleCount,
       unresolvedSelectorCount: elementCss.unresolvedSelectorCount + classCss.unresolvedSelectorCount,
@@ -1116,6 +1189,8 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       duplicateClassIdCount: classAudit.duplicateClassIdCount,
       duplicateClassNameCount: classAudit.duplicateClassNameCount,
       emptyStyledClassCount: classAudit.emptyStyledClassCount,
+      fallbackCssMissingClassSelectorCount: fallbackCssAudit.missingClassSelectorCount,
+      fallbackCssElementIdSelectorCount: fallbackCssAudit.elementIdSelectorCount,
       dependencyWarningCount: externalCode.dependencies.length,
       jsWarningCount,
       nativeImageCount: assetManifest.summary.nativeImages,
