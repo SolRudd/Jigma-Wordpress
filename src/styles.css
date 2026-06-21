@@ -86,7 +86,7 @@ textarea:focus-visible {
 textarea,
 .layer-list--root,
 .preview-stage,
-.code-editor-scroll,
+.source-editor-stack,
 .template-list,
 .json-output {
   scrollbar-color: rgba(148, 163, 184, 0.34) transparent;
@@ -96,7 +96,7 @@ textarea,
 textarea::-webkit-scrollbar,
 .layer-list--root::-webkit-scrollbar,
 .preview-stage::-webkit-scrollbar,
-.code-editor-scroll::-webkit-scrollbar,
+.source-editor-stack::-webkit-scrollbar,
 .template-list::-webkit-scrollbar,
 .json-output::-webkit-scrollbar {
   height: 8px;
@@ -106,7 +106,7 @@ textarea::-webkit-scrollbar,
 textarea::-webkit-scrollbar-thumb,
 .layer-list--root::-webkit-scrollbar-thumb,
 .preview-stage::-webkit-scrollbar-thumb,
-.code-editor-scroll::-webkit-scrollbar-thumb,
+.source-editor-stack::-webkit-scrollbar-thumb,
 .template-list::-webkit-scrollbar-thumb,
 .json-output::-webkit-scrollbar-thumb {
   background: rgba(148, 163, 184, 0.32);
@@ -115,6 +115,26 @@ textarea::-webkit-scrollbar-thumb,
 
 .app-shell {
   min-height: 100vh;
+}
+
+.workspace-error {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(251, 113, 133, 0.34);
+  border-radius: var(--jigma-radius-md);
+  color: var(--jigma-text);
+  display: grid;
+  gap: 10px;
+  margin: 24px;
+  padding: 24px;
+}
+
+.workspace-error h1,
+.workspace-error p {
+  margin: 0;
+}
+
+.workspace-error p {
+  color: #fecdd3;
 }
 
 .sr-only {
@@ -467,7 +487,7 @@ textarea::-webkit-scrollbar-thumb,
 .app-workspace {
   display: grid;
   gap: 8px;
-  grid-template-columns: 248px minmax(0, 1fr) 328px;
+  grid-template-columns: 248px minmax(0, 1fr) 332px;
   height: calc(100vh - 78px);
   min-height: 0;
   overflow: hidden;
@@ -810,7 +830,7 @@ textarea::-webkit-scrollbar-thumb,
 .builder-split {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(390px, 0.45fr) minmax(460px, 0.55fr);
+  grid-template-columns: minmax(0, 0.46fr) minmax(0, 0.54fr);
   min-height: 0;
   overflow: hidden;
 }
@@ -931,22 +951,15 @@ textarea::-webkit-scrollbar-thumb,
 .code-editor-shell {
   --code-editor-font-size: 0.84rem;
   --code-editor-line-height: 1.62;
-  --code-editor-row-height: calc(var(--code-editor-font-size) * var(--code-editor-line-height));
   background:
     linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
     #070b16;
   background-size: 44px 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.code-editor-scroll {
   display: grid;
   grid-template-columns: 46px minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .code-lines {
@@ -958,7 +971,7 @@ textarea::-webkit-scrollbar-thumb,
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--code-editor-font-size);
   line-height: var(--code-editor-line-height);
-  min-height: max(100%, calc((var(--editor-lines) * var(--code-editor-row-height)) + 28px));
+  min-height: 100%;
   overflow: hidden;
   padding: 14px 9px 14px 0;
   text-align: right;
@@ -967,84 +980,24 @@ textarea::-webkit-scrollbar-thumb,
 
 .code-lines span {
   display: block;
-  min-height: var(--code-editor-row-height);
-}
-
-.code-layer {
-  min-height: max(100%, calc((var(--editor-lines) * var(--code-editor-row-height)) + 28px));
-  min-width: max(100%, 720px);
-  position: relative;
 }
 
 .code-editor {
   background: transparent;
   border: 0;
-  caret-color: #dbeafe;
-  color: transparent;
+  color: #dbeafe;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--code-editor-font-size);
   height: 100%;
-  inset: 0;
   line-height: var(--code-editor-line-height);
   min-height: 0;
   outline: none;
-  overflow: hidden;
+  overflow: auto;
   padding: 14px 16px;
-  position: absolute;
   resize: none;
   tab-size: 2;
   white-space: pre;
   width: 100%;
-}
-
-.code-editor::selection {
-  background: rgba(59, 130, 246, 0.36);
-  color: transparent;
-}
-
-.code-highlight {
-  color: #dbeafe;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--code-editor-font-size);
-  line-height: var(--code-editor-line-height);
-  margin: 0;
-  min-height: 100%;
-  padding: 14px 16px;
-  pointer-events: none;
-  tab-size: 2;
-  white-space: pre;
-}
-
-.code-highlight__line {
-  display: block;
-  min-height: var(--code-editor-row-height);
-}
-
-.token--tag,
-.token--selector {
-  color: #8bdbff;
-}
-
-.token--attr,
-.token--property {
-  color: #86efac;
-}
-
-.token--string {
-  color: #f0abfc;
-}
-
-.token--keyword {
-  color: #c4b5fd;
-}
-
-.token--comment {
-  color: #64748b;
-}
-
-.token--number,
-.token--punctuation {
-  color: #fbbf24;
 }
 
 .editor-foot {

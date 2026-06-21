@@ -366,9 +366,11 @@ describe("Bricks export", () => {
     expect(markup).toContain('id="source-tab-html"');
     expect(markup).toContain('aria-selected="true"');
     expect(markup).toContain('id="source-panel-html"');
-    expect(markup).toContain('id="source-panel-css"');
-    expect(markup).toContain('id="source-panel-js"');
-    expect(markup).toContain('class="code-highlight"');
+    expect(markup).not.toContain('id="source-panel-css"');
+    expect(markup).not.toContain('id="source-panel-js"');
+    expect(markup).toContain('class="code-editor"');
+    expect(markup).toContain('aria-controls="source-panel-css"');
+    expect(markup).toContain('aria-controls="source-panel-js"');
     expect(markup).toContain("Review required");
   });
 

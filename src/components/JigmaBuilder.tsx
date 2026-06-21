@@ -323,125 +323,39 @@ function getLayerBemText(node: LayerNode) {
   return node.tagName;
 }
 
-function getTokenClass(kind: EditorKind, token: string) {
-  if (!token) {
-    return "token";
-  }
-
-  if (kind === "html") {
-    if (/^<\/?[a-z][\w:-]*/i.test(token) || /^\/?>$/.test(token)) {
-      return "token token--tag";
-    }
-    if (/^[\w:-]+(?==)$/.test(token)) {
-      return "token token--attr";
-    }
-    if (/^["']/.test(token)) {
-      return "token token--string";
-    }
-  }
-
-  if (kind === "css") {
-    if (/^--?[\w-]+(?=\s*:)?$/.test(token)) {
-      return "token token--property";
-    }
-    if (/^[.#][\w-]+$/.test(token)) {
-      return "token token--selector";
-    }
-    if (/^[@{}:;(),]$/.test(token)) {
-      return "token token--punctuation";
-    }
-    if (/^["']/.test(token) || /^#[0-9a-f]{3,8}$/i.test(token)) {
-      return "token token--string";
-    }
-  }
-
-  if (kind === "js") {
-    if (/^(const|let|var|function|return|if|else|for|while|import|export|from|async|await|new|class)$/.test(token)) {
-      return "token token--keyword";
-    }
-    if (/^["'`]/.test(token)) {
-      return "token token--string";
-    }
-    if (/^\/\/|^\/\*/.test(token)) {
-      return "token token--comment";
-    }
-    if (/^\d+(?:\.\d+)?$/.test(token)) {
-      return "token token--number";
-    }
-  }
-
-  return "token";
-}
-
-function tokenizeCodeLine(kind: EditorKind, line: string) {
-  const pattern = kind === "html"
-    ? /(<\/?[a-z][\w:-]*|\/?>|[\w:-]+(?==)|"[^"]*"|'[^']*')/gi
-    : kind === "css"
-    ? /([.#][\w-]+|--?[\w-]+(?=\s*:)|#[0-9a-f]{3,8}\b|@[\w-]+|[{}:;(),]|"[^"]*"|'[^']*')/gi
-    : /(\/\/.*|\/\*[\s\S]*?\*\/|`[^`]*`|"[^"]*"|'[^']*'|\b(?:const|let|var|function|return|if|else|for|while|import|export|from|async|await|new|class)\b|\b\d+(?:\.\d+)?\b)/g;
-
-  return line.split(pattern).filter((token) => token !== "");
-}
-
-function renderHighlightedCode(kind: EditorKind, value: string) {
-  const lines = value.split("\n");
-  return lines.map((line, lineIndex) => (
-    <span className="code-highlight__line" key={`${lineIndex}-${line}`}>
-      {tokenizeCodeLine(kind, line).map((token, tokenIndex) => (
-        <span className={getTokenClass(kind, token)} key={`${tokenIndex}-${token}`}>
-          {token}
-        </span>
-      ))}
-      {line.length === 0 ? "\n" : null}
-    </span>
-  ));
-}
-
 function CodeEditor(props: {
   kind: EditorKind;
   label: string;
   badge?: string;
-  active: boolean;
   value: string;
   onChange: (value: string) => void;
   onPaste: (event: EditorPasteEvent) => void;
 }) {
   const lineCount = Math.max(1, props.value.split("\n").length);
-  const editorStyle = {
-    "--editor-lines": lineCount,
-  } as CSSProperties;
 
   return (
     <section
       id={`source-panel-${props.kind}`}
-      className={props.active ? "editor-card editor-card--active" : "editor-card"}
+      className="editor-card editor-card--active"
       role="tabpanel"
       aria-labelledby={`source-tab-${props.kind}`}
       aria-label={`${props.label} source editor`}
-      hidden={!props.active}
     >
-      <div className="code-editor-shell" style={editorStyle}>
-        <div className="code-editor-scroll">
-          <div className="code-lines" aria-hidden="true">
-            {Array.from({ length: lineCount }, (_, index) => (
-              <span key={index}>{index + 1}</span>
-            ))}
-          </div>
-          <div className="code-layer">
-            <pre className="code-highlight" aria-hidden="true">
-              {renderHighlightedCode(props.kind, props.value)}
-            </pre>
-            <textarea
-              className="code-editor"
-              spellCheck={false}
-              value={props.value}
-              onPaste={props.onPaste}
-              onChange={(event) =>
-                props.onChange((event.currentTarget as HTMLTextAreaElement).value)}
-              aria-label={`${props.label} source`}
-            />
-          </div>
+      <div className="code-editor-shell">
+        <div className="code-lines" aria-hidden="true">
+          {Array.from({ length: lineCount }, (_, index) => (
+            <span key={index}>{index + 1}</span>
+          ))}
         </div>
+        <textarea
+          className="code-editor"
+          spellCheck={false}
+          value={props.value}
+          onPaste={props.onPaste}
+          onChange={(event) =>
+            props.onChange((event.currentTarget as HTMLTextAreaElement).value)}
+          aria-label={`${props.label} source`}
+        />
       </div>
     </section>
   );
@@ -1173,6 +1087,8 @@ export default function JigmaBuilder() {
   const activeTemplateLabel = activeTemplate === "custom"
     ? "Custom section"
     : templates.find((template) => template.key === activeTemplate)?.name ?? "Custom section";
+  const activeEditorDefinition = SOURCE_EDITOR_DEFINITIONS.find((editor) => editor.kind === activeEditorKind) ??
+    SOURCE_EDITOR_DEFINITIONS[0];
   const dependencyWarnings = dependencies
     .filter((dependency) => dependency.warning)
     .map((dependency): ConversionIssue => ({
@@ -1521,18 +1437,15 @@ export default function JigmaBuilder() {
                   ))}
                 </div>
                 <div className="source-editor-stack">
-                {SOURCE_EDITOR_DEFINITIONS.map((editor) => (
                   <CodeEditor
-                    key={editor.kind}
-                    kind={editor.kind}
-                    label={editor.label}
-                    badge={editor.badge}
-                    active={activeEditorKind === editor.kind}
-                    value={getEditorValue(editor.kind)}
-                    onChange={(value) => setEditorValue(editor.kind, value)}
-                    onPaste={(event) => handlePaste(editor.kind, event)}
+                    key={activeEditorDefinition.kind}
+                    kind={activeEditorDefinition.kind}
+                    label={activeEditorDefinition.label}
+                    badge={activeEditorDefinition.badge}
+                    value={getEditorValue(activeEditorDefinition.kind)}
+                    onChange={(value) => setEditorValue(activeEditorDefinition.kind, value)}
+                    onPaste={(event) => handlePaste(activeEditorDefinition.kind, event)}
                   />
-                ))}
                 </div>
                 <div className="editor-foot">
                   <p>{getEditorHint(activeEditorKind)}</p>
