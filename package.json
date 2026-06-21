@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "release:check": "npm run typecheck && npm run test && npm run build && npm audit --json > reports/package-audit.json"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

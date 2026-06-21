@@ -1,0 +1,21 @@
+{
+  "generatedAt": "2026-06-21T00:59:47.214Z",
+  "dist": "dist",
+  "assets": [
+    {
+      "file": "dist/assets/index-_Qe_GAzQ.js",
+      "bytes": 736866,
+      "gzipBytes": 246180
+    },
+    {
+      "file": "dist/assets/index-qPQ0gM3z.css",
+      "bytes": 29705,
+      "gzipBytes": 6376
+    }
+  ],
+  "totalBytes": 766571,
+  "totalGzipBytes": 252556,
+  "notes": [
+    "Vite reports a chunk-size warning when the main JS asset exceeds 500 kB."
+  ]
+}

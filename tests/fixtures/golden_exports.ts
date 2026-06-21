@@ -1,0 +1,238 @@
+export interface GoldenExportFixture {
+  templateId: string;
+  templateName: string;
+  expected: {
+    elementCount: number;
+    classCount: number;
+    rootClass: string;
+    rootClassId: string;
+    firstLabels: string[];
+    firstClassIds: Record<string, string>;
+    svgLabels: string[];
+    nativeStyleMappedCount: number;
+    customCssFallbackCount: number;
+    responsiveRuleCount: number;
+    pseudoRuleCount: number;
+    cssAttachedRuleCount: number;
+    cssUnmappedRuleCount: number;
+    unresolvedSelectorCount: number;
+    unsignedSvgCodeCount: number;
+  };
+}
+
+export const goldenExportFixtures: GoldenExportFixture[] = [
+  {
+    templateId: "jigma-hero",
+    templateName: "Jigma Hero",
+    expected: {
+      elementCount: 25,
+      classCount: 20,
+      rootClass: "jg-hero",
+      rootClassId: "jukl6j",
+      firstLabels: ["Hero Section", "Hero Content", "Hero Eyebrow", "Hero Title", "Hero Text"],
+      firstClassIds: {
+        "jg-hero": "jukl6j",
+        "jg-hero__content": "aohrym",
+        "jg-hero__eyebrow": "tkf4yw",
+        "jg-hero__title": "avso91",
+        "jg-hero__text": "jnlpnl",
+        "jg-hero__actions": "jb90qy",
+        "jg-hero__button": "jce50d",
+        "jg-hero__button--primary": "hxce07",
+      },
+      svgLabels: [],
+      nativeStyleMappedCount: 118,
+      customCssFallbackCount: 10,
+      responsiveRuleCount: 1,
+      pseudoRuleCount: 0,
+      cssAttachedRuleCount: 34,
+      cssUnmappedRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      unsignedSvgCodeCount: 0,
+    },
+  },
+  {
+    templateId: "proof-bar",
+    templateName: "Proof Bar",
+    expected: {
+      elementCount: 17,
+      classCount: 9,
+      rootClass: "jg-proof",
+      rootClassId: "o3yh9z",
+      firstLabels: ["Proof Section", "Proof Shell", "Proof Item", "Proof Icon", "Proof Content"],
+      firstClassIds: {
+        "jg-proof": "o3yh9z",
+        "jg-proof__shell": "amnrq9",
+        "jg-proof__item": "jfcm8p",
+        "jg-proof__icon": "jprkb4",
+        "jg-proof__content": "id5fqa",
+        "jg-proof__number": "g8nf40",
+        "jg-proof__label": "j1zbq5",
+        "jg-proof__item-2": "jmc5ry",
+      },
+      svgLabels: [],
+      nativeStyleMappedCount: 57,
+      customCssFallbackCount: 25,
+      responsiveRuleCount: 1,
+      pseudoRuleCount: 1,
+      cssAttachedRuleCount: 22,
+      cssUnmappedRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      unsignedSvgCodeCount: 0,
+    },
+  },
+  {
+    templateId: "services",
+    templateName: "Services",
+    expected: {
+      elementCount: 18,
+      classCount: 10,
+      rootClass: "jg-services",
+      rootClassId: "j200nu",
+      firstLabels: ["Services Section", "Services Header", "Services Eyebrow", "Services Title", "Services Text"],
+      firstClassIds: {
+        "jg-services": "j200nu",
+        "jg-services__header": "mtdk9w",
+        "jg-services__eyebrow": "jebegf",
+        "jg-services__title": "iqv8ct",
+        "jg-services__text": "jl4lt0",
+        "jg-services__grid": "j69oua",
+        "jg-services__card": "j9nyo3",
+        "jg-services__number": "jwd68z",
+      },
+      svgLabels: [],
+      nativeStyleMappedCount: 72,
+      customCssFallbackCount: 3,
+      responsiveRuleCount: 1,
+      pseudoRuleCount: 0,
+      cssAttachedRuleCount: 20,
+      cssUnmappedRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      unsignedSvgCodeCount: 0,
+    },
+  },
+  {
+    templateId: "product-showcase",
+    templateName: "iPhone/Product Showcase",
+    expected: {
+      elementCount: 15,
+      classCount: 15,
+      rootClass: "jg-product",
+      rootClassId: "tgq3um",
+      firstLabels: ["Product Section", "Product Media", "Product Phone", "Product Screen", "Product Status"],
+      firstClassIds: {
+        "jg-product": "tgq3um",
+        "jg-product__media": "j9jdql",
+        "jg-product__phone": "eetc00",
+        "jg-product__screen": "y71vow",
+        "jg-product__status": "uiy24u",
+        "jg-product__score": "jx7oze",
+        "jg-product__caption": "j63hwm",
+        "jg-product__content": "j7eeg5",
+      },
+      svgLabels: [],
+      nativeStyleMappedCount: 54,
+      customCssFallbackCount: 7,
+      responsiveRuleCount: 1,
+      pseudoRuleCount: 0,
+      cssAttachedRuleCount: 17,
+      cssUnmappedRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      unsignedSvgCodeCount: 0,
+    },
+  },
+  {
+    templateId: "pricing",
+    templateName: "Pricing",
+    expected: {
+      elementCount: 16,
+      classCount: 13,
+      rootClass: "jg-pricing",
+      rootClassId: "jqwkz3",
+      firstLabels: ["Pricing Section", "Pricing Header", "Pricing Eyebrow", "Pricing Title", "Pricing Text"],
+      firstClassIds: {
+        "jg-pricing": "jqwkz3",
+        "jg-pricing__header": "jau9gl",
+        "jg-pricing__eyebrow": "pi70kg",
+        "jg-pricing__title": "jwym3o",
+        "jg-pricing__text": "auyh8i",
+        "jg-pricing__grid": "jvrv7v",
+        "jg-pricing__card": "jlwr4j",
+        "jg-pricing__card-title": "n5qlgs",
+      },
+      svgLabels: [],
+      nativeStyleMappedCount: 73,
+      customCssFallbackCount: 3,
+      responsiveRuleCount: 1,
+      pseudoRuleCount: 0,
+      cssAttachedRuleCount: 20,
+      cssUnmappedRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      unsignedSvgCodeCount: 0,
+    },
+  },
+  {
+    templateId: "testimonials",
+    templateName: "Testimonials",
+    expected: {
+      elementCount: 15,
+      classCount: 10,
+      rootClass: "jg-testimonials",
+      rootClassId: "j3719f",
+      firstLabels: [
+        "Testimonials Section",
+        "Testimonials Header",
+        "Testimonials Eyebrow",
+        "Testimonials Title",
+        "Testimonials Grid",
+      ],
+      firstClassIds: {
+        "jg-testimonials": "j3719f",
+        "jg-testimonials__header": "ju141g",
+        "jg-testimonials__eyebrow": "jqfv31",
+        "jg-testimonials__title": "jpweky",
+        "jg-testimonials__grid": "j2l3up",
+        "jg-testimonials__card": "jcg9fw",
+        "jg-testimonials__quote": "jvstrv",
+        "jg-testimonials__quote-text": "jyg8tz",
+      },
+      svgLabels: [],
+      nativeStyleMappedCount: 44,
+      customCssFallbackCount: 1,
+      responsiveRuleCount: 1,
+      pseudoRuleCount: 0,
+      cssAttachedRuleCount: 12,
+      cssUnmappedRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      unsignedSvgCodeCount: 0,
+    },
+  },
+  {
+    templateId: "cta",
+    templateName: "CTA",
+    expected: {
+      elementCount: 6,
+      classCount: 6,
+      rootClass: "jg-cta",
+      rootClassId: "b658zn",
+      firstLabels: ["CTA Section", "CTA Panel", "CTA Eyebrow", "CTA Title", "CTA Text"],
+      firstClassIds: {
+        "jg-cta": "b658zn",
+        "jg-cta__panel": "j9gjif",
+        "jg-cta__eyebrow": "kzlbr4",
+        "jg-cta__title": "j9nsoq",
+        "jg-cta__text": "juwhnm",
+        "jg-cta__button": "jicgvd",
+      },
+      svgLabels: [],
+      nativeStyleMappedCount: 34,
+      customCssFallbackCount: 3,
+      responsiveRuleCount: 1,
+      pseudoRuleCount: 0,
+      cssAttachedRuleCount: 8,
+      cssUnmappedRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      unsignedSvgCodeCount: 0,
+    },
+  },
+];

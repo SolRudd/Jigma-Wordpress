@@ -1,0 +1,16 @@
+{
+  "generatedAt": "2026-06-21T01:00:32.066Z",
+  "standalone": {
+    "name": "jigma",
+    "version": "0.1.0"
+  },
+  "plugin": {
+    "slug": "jigma-bricks",
+    "version": "0.1.0",
+    "targetBricksVersion": "2.3.7"
+  },
+  "checks": {
+    "jsSyntax": "passed: deno check jigma-bricks/assets/jigma-bricks.js",
+    "phpLint": "not run: php and docker unavailable in local environment"
+  }
+}

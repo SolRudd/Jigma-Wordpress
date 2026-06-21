@@ -1,5 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createBricksExport, TARGET_BRICKS_VERSION } from "../lib/bricks/export.ts";
 import { BRICKS_ELEMENT_CUSTOM_CSS_FIELD } from "../lib/css/element.ts";
@@ -30,6 +31,7 @@ import JigmaBuilder, {
   SOURCE_EDITOR_DEFINITIONS,
 } from "../src/components/JigmaBuilder.tsx";
 import type { OutputOptions } from "../types/jigma.ts";
+import { goldenExportFixtures } from "./fixtures/golden_exports.ts";
 import { sectionFixtures } from "./fixtures/sections.ts";
 
 const defaultOptions: OutputOptions = {
@@ -448,6 +450,125 @@ describe("Bricks export", () => {
     });
   });
 
+  it("matches golden Bricks export fixtures for every beta template", () => {
+    expect(goldenExportFixtures.map((fixture) => fixture.templateId)).toEqual(
+      templates.map((template) => template.id),
+    );
+
+    goldenExportFixtures.forEach((fixture) => {
+      const template = templates.find((item) => item.id === fixture.templateId);
+      expect(template, fixture.templateId).toBeDefined();
+
+      const result = exportFor(template!.html, template!.css, template!.javascript, {
+        projectPrefix: template!.prefix,
+        blockName: template!.blockName,
+      });
+      const copyPayload = JSON.stringify(result);
+      const parsedPayload = JSON.parse(copyPayload) as typeof result;
+      const classRecords = result.globalClasses ?? [];
+      const classIds = classRecords.map((entry) => entry.id);
+      const classNames = classRecords.map((entry) => entry.name);
+      const classById = new Map(classRecords.map((entry) => [entry.id, entry]));
+      const classIdByName = new Map(classRecords.map((entry) => [entry.name, entry.id]));
+      const referencedClassIds = result.content.flatMap((element) =>
+        Array.isArray(element.settings._cssGlobalClasses)
+          ? element.settings._cssGlobalClasses.map((id) => `${id}`)
+          : []
+      );
+      const modifierClasses = classRecords.filter((entry) => entry.name.includes("--"));
+      const fallbackCss = classRecords
+        .map((entry) => `${entry.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`)
+        .filter((css) => css.trim().length > 0);
+
+      expect(result.validation.hierarchyValid, fixture.templateName).toBe(true);
+      expect(result.validation.classReferenceValid, fixture.templateName).toBe(true);
+      expect(result.validation.totalElements, fixture.templateName).toBe(fixture.expected.elementCount);
+      expect(result.validation.globalClassCount, fixture.templateName).toBe(fixture.expected.classCount);
+      expect(result.content, fixture.templateName).toHaveLength(fixture.expected.elementCount);
+      expect(classRecords, fixture.templateName).toHaveLength(fixture.expected.classCount);
+      expect(classNames[0], fixture.templateName).toBe(fixture.expected.rootClass);
+      expect(classIds[0], fixture.templateName).toBe(fixture.expected.rootClassId);
+      expect(result.content.slice(0, fixture.expected.firstLabels.length).map((element) => element.label))
+        .toEqual(fixture.expected.firstLabels);
+      expect(result.content.every((element) => typeof element.label === "string" && element.label.length > 0))
+        .toBe(true);
+      expect(classIds.every((id) => /^[a-z0-9]{6}$/.test(id)), fixture.templateName).toBe(true);
+      expect(new Set(classIds).size, fixture.templateName).toBe(classIds.length);
+      expect(new Set(classNames).size, fixture.templateName).toBe(classNames.length);
+
+      Object.entries(fixture.expected.firstClassIds).forEach(([className, id]) => {
+        expect(classIdByName.get(className), `${fixture.templateName}: ${className}`).toBe(id);
+      });
+
+      expect(referencedClassIds.length, fixture.templateName).toBeGreaterThan(0);
+      expect(referencedClassIds.every((id) => classById.has(id)), fixture.templateName).toBe(true);
+
+      classRecords.forEach((classRecord) => {
+        const assignedElements = result.content.filter((element) =>
+          Array.isArray(element.settings._cssGlobalClasses) &&
+          element.settings._cssGlobalClasses.includes(classRecord.id)
+        );
+        if (assignedElements.length > 1) {
+          assignedElements.forEach((element) => {
+            expect((element.settings._cssGlobalClasses as string[]).includes(classRecord.id)).toBe(true);
+          });
+        }
+      });
+
+      modifierClasses.forEach((modifierClass) => {
+        const baseName = modifierClass.name.split("--")[0];
+        const baseId = classIdByName.get(baseName);
+        expect(baseId, `${fixture.templateName}: ${modifierClass.name} base class`).toBeDefined();
+        expect(baseId).not.toBe(modifierClass.id);
+        const modifierElements = result.content.filter((element) =>
+          Array.isArray(element.settings._cssGlobalClasses) &&
+          element.settings._cssGlobalClasses.includes(modifierClass.id)
+        );
+        expect(modifierElements.length, `${fixture.templateName}: ${modifierClass.name}`).toBeGreaterThan(0);
+        modifierElements.forEach((element) => {
+          expect((element.settings._cssGlobalClasses as string[]).includes(baseId!)).toBe(true);
+        });
+      });
+
+      expect(result.validation.nativeStyleMappedCount, fixture.templateName)
+        .toBe(fixture.expected.nativeStyleMappedCount);
+      expect(result.validation.customCssFallbackCount, fixture.templateName)
+        .toBe(fixture.expected.customCssFallbackCount);
+      expect(result.validation.responsiveRuleCount, fixture.templateName).toBe(fixture.expected.responsiveRuleCount);
+      expect(result.validation.pseudoRuleCount, fixture.templateName).toBe(fixture.expected.pseudoRuleCount);
+      expect(result.validation.cssAttachedRuleCount, fixture.templateName).toBe(fixture.expected.cssAttachedRuleCount);
+      expect(result.validation.cssUnmappedRuleCount, fixture.templateName).toBe(fixture.expected.cssUnmappedRuleCount);
+      expect(result.validation.unresolvedSelectorCount, fixture.templateName)
+        .toBe(fixture.expected.unresolvedSelectorCount);
+      expect(result.validation.unsignedSvgCodeCount, fixture.templateName).toBe(fixture.expected.unsignedSvgCodeCount);
+      expect(result.content.filter((element) => element.name === "svg").map((element) => element.label ?? ""))
+        .toEqual(fixture.expected.svgLabels);
+
+      expect(result.validation.cssUnmappedRuleCount === 0 || result.warnings.length > 0, fixture.templateName)
+        .toBe(true);
+      expect(result.content.some((element) => element.label === "Generated BEM CSS"), fixture.templateName)
+        .toBe(false);
+      expect(result.content.some((element) =>
+        Object.keys(element.settings).some((key) => key !== "_cssGlobalClasses")
+      ), fixture.templateName).toBe(true);
+      expect(fallbackCss.length, fixture.templateName).toBeGreaterThan(0);
+      fallbackCss.forEach((css) => {
+        expect(css.includes("%root%") || css.includes("@keyframes"), fixture.templateName).toBe(true);
+        const selectorLines = css.split("\n").filter((line) => line.trim().endsWith("{"));
+        expect(selectorLines.every((line) => {
+          const trimmed = line.trim();
+          return trimmed.startsWith("%root%") || trimmed.startsWith("@") || /^\d/.test(trimmed);
+        }), fixture.templateName)
+          .toBe(true);
+      });
+
+      expect(parsedPayload.source, fixture.templateName).toBe("bricksCopiedElements");
+      expect(parsedPayload.version, fixture.templateName).toBe(TARGET_BRICKS_VERSION);
+      expect(parsedPayload.content.length, fixture.templateName).toBe(result.content.length);
+      expect(parsedPayload.globalClasses?.length, fixture.templateName).toBe(classRecords.length);
+    });
+  });
+
   it("keeps the beta workspace focused and generated JSON hidden by default", () => {
     const markup = renderToStaticMarkup(createElement(JigmaBuilder));
 
@@ -479,6 +600,50 @@ describe("Bricks export", () => {
     expect(markup).not.toContain("dev server");
     expect(markup).not.toContain("local setup");
     expect(markup).not.toContain("debug payload");
+  });
+
+  it("renders release smoke surfaces for template, preview, inspector, export, presets, and mobile navigation", () => {
+    const markup = renderToStaticMarkup(createElement(JigmaBuilder));
+    const builderSource = readFileSync(
+      new URL("../src/components/JigmaBuilder.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(markup).toContain("Template Library");
+    expect(markup).toContain("Jigma Hero");
+    expect(markup).toContain("Proof Bar");
+    expect(markup).toContain('role="tablist" aria-label="Source editors"');
+    expect(markup).toContain('id="source-tab-html"');
+    expect(markup).toContain('id="source-tab-css"');
+    expect(markup).toContain('id="source-tab-js"');
+    expect(markup).toContain('class="preview-frame"');
+    expect(markup).toContain("desktop preview");
+    expect(markup).toContain("tablet preview");
+    expect(markup).toContain("mobile preview");
+    expect(markup).toContain('role="tablist" aria-label="Conversion workflow"');
+    expect(markup).toContain("Layers");
+    expect(markup).toContain("Dependencies");
+    expect(markup).toContain("Warnings");
+    expect(markup).toContain("Export");
+    expect(markup).toContain("Select");
+    expect(markup).toContain("Deselect");
+    expect(markup).toContain("Undo");
+    expect(markup).toContain('class="conversion-check__summary"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Copy Bricks Structure");
+    expect(markup).toContain("Copy Structure");
+    expect(markup).toContain("Save Preset locally");
+    expect(markup).toContain("Load Preset locally");
+    expect(markup).toContain("Export JSON");
+    expect(markup).toContain("Import JSON");
+    expect(markup).toContain('class="workspace-mode-tabs"');
+    expect(markup).toContain("Code");
+    expect(markup).toContain("Preview");
+    expect(markup).toContain("Inspect");
+    expect(builderSource).toContain("Download JSON");
+    expect(builderSource).toContain("Output format");
+    expect(builderSource).toContain("Native Bricks Classes");
+    expect(builderSource).toContain("showAllWarnings");
   });
 
   it("saves local preset values and applies them to fallback BEM output", () => {

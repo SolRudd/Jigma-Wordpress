@@ -1,0 +1,91 @@
+{
+  "generatedAt": "2026-06-21T01:00:14.138Z",
+  "url": "http://127.0.0.1:5173/",
+  "results": [
+    {
+      "width": 1920,
+      "height": 1080,
+      "title": "Jigma",
+      "hasEditor": true,
+      "hasPreview": true,
+      "hasWorkflowTabs": true,
+      "scrollWidth": 1920,
+      "clientWidth": 1920,
+      "overflowAmount": 0,
+      "hasHorizontalOverflow": false,
+      "builderHeight": 1080,
+      "consoleErrors": []
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "title": "Jigma",
+      "hasEditor": true,
+      "hasPreview": true,
+      "hasWorkflowTabs": true,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "overflowAmount": 0,
+      "hasHorizontalOverflow": false,
+      "builderHeight": 900,
+      "consoleErrors": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "title": "Jigma",
+      "hasEditor": true,
+      "hasPreview": true,
+      "hasWorkflowTabs": true,
+      "scrollWidth": 1280,
+      "clientWidth": 1280,
+      "overflowAmount": 0,
+      "hasHorizontalOverflow": false,
+      "builderHeight": 800,
+      "consoleErrors": []
+    },
+    {
+      "width": 1024,
+      "height": 768,
+      "title": "Jigma",
+      "hasEditor": true,
+      "hasPreview": true,
+      "hasWorkflowTabs": true,
+      "scrollWidth": 1024,
+      "clientWidth": 1024,
+      "overflowAmount": 0,
+      "hasHorizontalOverflow": false,
+      "builderHeight": 768,
+      "consoleErrors": []
+    },
+    {
+      "width": 768,
+      "height": 1024,
+      "title": "Jigma",
+      "hasEditor": true,
+      "hasPreview": true,
+      "hasWorkflowTabs": true,
+      "scrollWidth": 768,
+      "clientWidth": 768,
+      "overflowAmount": 0,
+      "hasHorizontalOverflow": false,
+      "builderHeight": 1232,
+      "consoleErrors": []
+    },
+    {
+      "width": 390,
+      "height": 844,
+      "title": "Jigma",
+      "hasEditor": true,
+      "hasPreview": true,
+      "hasWorkflowTabs": true,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "overflowAmount": 0,
+      "hasHorizontalOverflow": false,
+      "builderHeight": 1540,
+      "consoleErrors": []
+    }
+  ],
+  "passed": true
+}
