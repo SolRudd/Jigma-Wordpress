@@ -39,57 +39,114 @@ export const jigmaHeroTemplate: JigmaTemplateSource = {
         </div>
       </div>
       <div class="jigma-hero__visual" aria-label="Jigma product preview">
-        <svg class="jigma-hero__visual-svg" viewBox="0 0 760 560" role="img" aria-label="HTML to Bricks conversion preview">
+        <svg class="jigma-hero__visual-svg" viewBox="0 0 860 620" role="img" aria-label="Jigma HTML to Bricks conversion preview">
           <defs>
             <linearGradient id="jh-panel" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0" stop-color="#14142b"></stop>
-              <stop offset="1" stop-color="#07070f"></stop>
+              <stop offset="0" stop-color="#15152f"></stop>
+              <stop offset="1" stop-color="#070712"></stop>
             </linearGradient>
             <linearGradient id="jh-accent" x1="0" x2="1" y1="0" y2="1">
               <stop offset="0" stop-color="#a96bff"></stop>
+              <stop offset=".58" stop-color="#6b46e5"></stop>
               <stop offset="1" stop-color="#5b7dff"></stop>
             </linearGradient>
+            <linearGradient id="jh-text-grad" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" stop-color="#6b6bff"></stop>
+              <stop offset=".5" stop-color="#a96bff"></stop>
+              <stop offset="1" stop-color="#d65bff"></stop>
+            </linearGradient>
             <radialGradient id="jh-core" cx=".5" cy=".48" r=".58">
-              <stop offset="0" stop-color="#d65bff" stop-opacity=".88"></stop>
-              <stop offset=".45" stop-color="#8b55d9" stop-opacity=".38"></stop>
+              <stop offset="0" stop-color="#d65bff" stop-opacity=".92"></stop>
+              <stop offset=".46" stop-color="#8b55d9" stop-opacity=".38"></stop>
               <stop offset="1" stop-color="#04040a" stop-opacity="0"></stop>
             </radialGradient>
+            <filter id="jh-glow" x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="18" result="blur"></feGaussianBlur>
+              <feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge>
+            </filter>
           </defs>
-          <path d="M84 270 C150 270 154 244 206 244M84 314 C150 314 160 356 206 390M554 244 C606 244 610 270 676 270M554 390 C606 390 610 314 676 314" fill="none" stroke="url(#jh-accent)" stroke-width="2" stroke-dasharray="7 9" opacity=".72"></path>
-          <rect x="30" y="86" width="250" height="362" rx="22" fill="url(#jh-panel)" stroke="#ffffff" stroke-opacity=".16"></rect>
-          <rect x="30" y="86" width="250" height="58" rx="22" fill="#111126" stroke="#ffffff" stroke-opacity=".08"></rect>
-          <rect x="58" y="111" width="32" height="32" rx="8" fill="url(#jh-accent)"></rect>
-          <text x="106" y="132" fill="#f0f1fb" font-size="15" font-weight="700">HTML + CSS</text>
-          <text x="62" y="184" fill="#696f9c" font-size="13" font-family="monospace">1</text>
-          <text x="86" y="184" fill="#5b7dff" font-size="13" font-family="monospace">&lt;section class="hero"&gt;</text>
-          <text x="62" y="214" fill="#696f9c" font-size="13" font-family="monospace">2</text>
-          <text x="86" y="214" fill="#34e0d0" font-size="13" font-family="monospace">  &lt;h1 class="title"&gt;</text>
-          <text x="62" y="244" fill="#696f9c" font-size="13" font-family="monospace">3</text>
-          <text x="86" y="244" fill="#aeb4d6" font-size="13" font-family="monospace">    Build clean code</text>
-          <text x="62" y="274" fill="#696f9c" font-size="13" font-family="monospace">4</text>
-          <text x="86" y="274" fill="#34e0d0" font-size="13" font-family="monospace">  &lt;/h1&gt;</text>
-          <text x="62" y="324" fill="#696f9c" font-size="13" font-family="monospace">/* CSS */</text>
-          <text x="86" y="356" fill="#a96bff" font-size="13" font-family="monospace">.hero { padding: 80px; }</text>
-          <text x="86" y="386" fill="#a96bff" font-size="13" font-family="monospace">.title { font-size: 48px; }</text>
-          <circle cx="380" cy="280" r="136" fill="url(#jh-core)"></circle>
-          <rect x="292" y="190" width="176" height="176" rx="34" fill="#101022" stroke="#a96bff" stroke-opacity=".42"></rect>
-          <path d="M380 232l20 42 46 7-33 32 8 45-41-22-41 22 8-45-33-32 46-7 20-42z" fill="url(#jh-accent)"></path>
-          <text x="380" y="412" text-anchor="middle" fill="#f0f1fb" font-size="32" font-weight="800">Jigma</text>
-          <text x="380" y="448" text-anchor="middle" fill="#34e0d0" font-size="14" font-weight="800" letter-spacing="8">CONVERT</text>
-          <rect x="506" y="86" width="224" height="362" rx="22" fill="url(#jh-panel)" stroke="#ffffff" stroke-opacity=".16"></rect>
-          <rect x="506" y="86" width="224" height="58" rx="22" fill="#111126" stroke="#ffffff" stroke-opacity=".08"></rect>
-          <rect x="534" y="110" width="30" height="30" rx="7" fill="#f4d338"></rect>
-          <text x="578" y="132" fill="#f0f1fb" font-size="15" font-weight="700">Bricks structure</text>
-          <text x="536" y="184" fill="#f0f1fb" font-size="14">Section (hero)</text>
-          <text x="556" y="218" fill="#aeb4d6" font-size="14">Container</text>
-          <text x="576" y="252" fill="#aeb4d6" font-size="14">Heading (h1)</text>
-          <text x="596" y="286" fill="#696f9c" font-size="14">Build faster</text>
-          <text x="576" y="336" fill="#aeb4d6" font-size="14">Buttons</text>
-          <text x="596" y="370" fill="#696f9c" font-size="14">Primary</text>
-          <text x="596" y="404" fill="#696f9c" font-size="14">Secondary</text>
-          <rect x="504" y="472" width="178" height="46" rx="16" fill="#101022" stroke="#34e0d0" stroke-opacity=".38"></rect>
-          <text x="593" y="501" text-anchor="middle" fill="#f0f1fb" font-size="15" font-weight="700">Ready to copy</text>
-        </svg>
+          <rect x="0" y="0" width="860" height="620" fill="transparent"></rect>
+          <path d="M62 356 C122 356 142 308 204 308M62 398 C136 398 152 468 238 468M622 308 C708 308 724 356 798 356M622 398 C696 398 720 468 802 468" fill="none" stroke="url(#jh-accent)" stroke-width="2" stroke-dasharray="8 10" opacity=".72"></path>
+          <circle cx="430" cy="346" r="190" fill="url(#jh-core)" filter="url(#jh-glow)" opacity=".9"></circle>
+
+          <g aria-label="HTML and CSS source card">
+            <rect x="34" y="98" width="276" height="392" rx="24" fill="url(#jh-panel)" stroke="#ffffff" stroke-opacity=".18"></rect>
+            <rect x="34" y="98" width="276" height="62" rx="24" fill="#111126" stroke="#ffffff" stroke-opacity=".08"></rect>
+            <rect x="60" y="122" width="34" height="34" rx="8" fill="url(#jh-accent)"></rect>
+            <text x="108" y="145" fill="#f0f1fb" font-size="16" font-weight="700">HTML + CSS</text>
+            <text x="64" y="198" fill="#696f9c" font-size="13" font-family="monospace">1</text>
+            <text x="88" y="198" fill="#5b7dff" font-size="13" font-family="monospace">&lt;section class=&quot;hero&quot;&gt;</text>
+            <text x="64" y="226" fill="#696f9c" font-size="13" font-family="monospace">2</text>
+            <text x="88" y="226" fill="#34e0d0" font-size="13" font-family="monospace">  &lt;div class=&quot;container&quot;&gt;</text>
+            <text x="64" y="254" fill="#696f9c" font-size="13" font-family="monospace">3</text>
+            <text x="88" y="254" fill="#a96bff" font-size="13" font-family="monospace">    &lt;h1 class=&quot;title&quot;&gt;</text>
+            <text x="64" y="282" fill="#696f9c" font-size="13" font-family="monospace">4</text>
+            <text x="88" y="282" fill="#aeb4d6" font-size="13" font-family="monospace">      Build faster with</text>
+            <text x="64" y="310" fill="#696f9c" font-size="13" font-family="monospace">5</text>
+            <text x="88" y="310" fill="#aeb4d6" font-size="13" font-family="monospace">      clean code</text>
+            <text x="64" y="338" fill="#696f9c" font-size="13" font-family="monospace">6</text>
+            <text x="88" y="338" fill="#34e0d0" font-size="13" font-family="monospace">    &lt;/h1&gt;</text>
+            <path d="M58 366H286" stroke="#ffffff" stroke-opacity=".08"></path>
+            <text x="64" y="398" fill="#696f9c" font-size="13" font-family="monospace">/* CSS */</text>
+            <text x="88" y="428" fill="#a96bff" font-size="13" font-family="monospace">.hero { padding: 80px; }</text>
+            <text x="88" y="456" fill="#d65bff" font-size="13" font-family="monospace">.title { font-size: 48px; }</text>
+          </g>
+
+          <g aria-label="Conversion status pipeline">
+            <rect x="348" y="82" width="168" height="52" rx="18" fill="#101022" stroke="#a96bff" stroke-opacity=".38"></rect>
+            <circle cx="374" cy="108" r="12" fill="#a96bff" fill-opacity=".18" stroke="#a96bff" stroke-opacity=".7"></circle>
+            <text x="396" y="114" fill="#f0f1fb" font-size="15" font-weight="700">Strict BEM</text>
+            <circle cx="496" cy="108" r="10" fill="none" stroke="#34e0d0" stroke-width="2"></circle>
+            <path d="M491 108l4 4 7-8" fill="none" stroke="#34e0d0" stroke-width="2" stroke-linecap="round"></path>
+
+            <rect x="348" y="190" width="168" height="52" rx="18" fill="#101022" stroke="#a96bff" stroke-opacity=".32"></rect>
+            <circle cx="374" cy="216" r="12" fill="#a96bff" fill-opacity=".18" stroke="#a96bff" stroke-opacity=".7"></circle>
+            <text x="396" y="222" fill="#f0f1fb" font-size="15" font-weight="700">Scoped CSS</text>
+            <circle cx="496" cy="216" r="10" fill="none" stroke="#34e0d0" stroke-width="2"></circle>
+            <path d="M491 216l4 4 7-8" fill="none" stroke="#34e0d0" stroke-width="2" stroke-linecap="round"></path>
+
+            <path d="M432 135V188M432 244V278M432 430V492" stroke="url(#jh-accent)" stroke-width="2" stroke-dasharray="8 10" opacity=".75"></path>
+            <rect x="328" y="278" width="208" height="152" rx="34" fill="#101022" stroke="#a96bff" stroke-opacity=".45"></rect>
+            <circle cx="432" cy="354" r="112" fill="url(#jh-core)" opacity=".86"></circle>
+            <path d="M390 346c0-24 18-44 42-44s42 20 42 44v42h-84z" fill="url(#jh-accent)"></path>
+            <path d="M384 326h28c3-14 10-24 20-24s17 10 20 24h28" fill="none" stroke="#d9c8ff" stroke-width="8" stroke-linecap="round"></path>
+            <path d="M400 350c13 16 51 16 64 0" fill="none" stroke="#07070f" stroke-width="8" stroke-linecap="round"></path>
+            <circle cx="410" cy="338" r="7" fill="#05050b"></circle>
+            <circle cx="454" cy="338" r="7" fill="#05050b"></circle>
+            <text x="432" y="478" text-anchor="middle" fill="url(#jh-text-grad)" font-size="36" font-weight="850">Jigma</text>
+            <text x="432" y="512" text-anchor="middle" fill="#34e0d0" font-size="14" font-weight="800" letter-spacing="8">CONVERT</text>
+
+            <rect x="346" y="532" width="172" height="48" rx="16" fill="#101022" stroke="#34e0d0" stroke-opacity=".38"></rect>
+            <text x="432" y="562" text-anchor="middle" fill="#f0f1fb" font-size="15" font-weight="700">Ready to copy</text>
+          </g>
+
+          <g aria-label="Bricks structure card">
+            <rect x="552" y="98" width="274" height="392" rx="24" fill="url(#jh-panel)" stroke="#ffffff" stroke-opacity=".18"></rect>
+            <rect x="552" y="98" width="274" height="62" rx="24" fill="#111126" stroke="#ffffff" stroke-opacity=".08"></rect>
+            <rect x="578" y="122" width="34" height="34" rx="8" fill="#f4d338"></rect>
+            <text x="624" y="145" fill="#f0f1fb" font-size="16" font-weight="700">Bricks structure</text>
+            <text x="586" y="194" fill="#f0f1fb" font-size="14">Section (hero)</text>
+            <path d="M600 206V438" stroke="#aeb4d6" stroke-opacity=".22"></path>
+            <text x="616" y="228" fill="#aeb4d6" font-size="14">Container</text>
+            <path d="M630 240V300" stroke="#aeb4d6" stroke-opacity=".22"></path>
+            <text x="646" y="262" fill="#aeb4d6" font-size="14">Heading (h1)</text>
+            <text x="666" y="292" fill="#696f9c" font-size="14">Build faster with clean code</text>
+            <text x="646" y="338" fill="#aeb4d6" font-size="14">Text (p)</text>
+            <text x="666" y="368" fill="#696f9c" font-size="14">Publish better websites</text>
+            <text x="616" y="414" fill="#aeb4d6" font-size="14">Div (btns)</text>
+            <text x="646" y="444" fill="#696f9c" font-size="14">Button (primary)</text>
+          </g>
+
+          <g aria-label="Layer inspector card">
+            <rect x="585" y="466" width="226" height="118" rx="18" fill="#101022" stroke="#ffffff" stroke-opacity=".18"></rect>
+            <text x="610" y="498" fill="#f0f1fb" font-size="15" font-weight="700">Layer inspector</text>
+            <text x="610" y="528" fill="#696f9c" font-size="13">Class</text>
+            <rect x="692" y="512" width="88" height="24" rx="9" fill="#15152b"></rect>
+            <text x="706" y="529" fill="#aeb4d6" font-size="12" font-family="monospace">hero__title</text>
+            <text x="610" y="558" fill="#696f9c" font-size="13">Status</text>
+            <text x="692" y="558" fill="#4ade80" font-size="13">Clean</text>
+          </g>
+         </svg>
       </div>
     </div>
   </div>
