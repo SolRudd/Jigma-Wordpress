@@ -368,7 +368,10 @@ describe("Bricks export", () => {
     expect(markup).toContain('id="source-panel-html"');
     expect(markup).not.toContain('id="source-panel-css"');
     expect(markup).not.toContain('id="source-panel-js"');
-    expect(markup).toContain('class="code-editor"');
+    expect(markup).toContain("code-editor-host");
+    expect(markup).toContain('data-editor-library="codemirror-6"');
+    expect(markup).not.toContain("<textarea");
+    expect(markup).not.toContain("code-lines");
     expect(markup).toContain('aria-controls="source-panel-css"');
     expect(markup).toContain('aria-controls="source-panel-js"');
     expect(markup).toContain("Review required");
@@ -1037,6 +1040,8 @@ describe("Bricks export", () => {
     expect(result.validation.unsignedSvgCodeCount).toBe(1);
     expect(result.validation.groupedWarningCount).toBe(result.warnings.length);
     expect(result.warnings.some((warning) => warning.code === "svg.signature_required")).toBe(true);
+    expect(result.warnings.filter((warning) => warning.code === "svg.signature_required")).toHaveLength(1);
+    expect(result.warnings.filter((warning) => warning.code === "svg.sanitized")).toHaveLength(0);
     expect(result.warnings.some((warning) => warning.message.includes("<path>"))).toBe(false);
   });
 
@@ -1048,7 +1053,9 @@ describe("Bricks export", () => {
     <script>alert(1)</script>
     <foreignObject><div>Unsafe</div></foreignObject>
     <use href="javascript:alert(1)"></use>
-    <path onclick="evil()" d="M0 0h20v20H0z" fill="url(#grad)" />
+    <use href="https://cdn.example.com/icons.svg#bad"></use>
+    <path onclick="evil()" d="M0 0h20v20H0z" fill="url(https://cdn.example.com/paint.svg#bad)" />
+    <path d="M1 1h18v18H1z" fill="url(#grad)" />
   </svg>
 </section>`,
       "",
@@ -1068,8 +1075,12 @@ describe("Bricks export", () => {
     expect(svgCode).not.toContain("onload");
     expect(svgCode).not.toContain("onclick");
     expect(svgCode).not.toContain("javascript:");
+    expect(svgCode).not.toContain("https://cdn.example.com");
     expect(warningDetails).toContain("Removed tags");
     expect(warningDetails).toContain("Removed attributes");
+    expect(warningDetails).toContain("External references");
+    expect(result.warnings.filter((warning) => warning.code === "svg.sanitized")).toHaveLength(1);
+    expect(result.warnings.filter((warning) => warning.code === "svg.signature_required")).toHaveLength(1);
     expect(result.validation.unsignedSvgCodeCount).toBe(1);
     expect(result.validation.unsignedJavaScriptCodeCount).toBe(1);
     expect(result.warnings.some((warning) => warning.code === "javascript.review_required")).toBe(true);

@@ -118,6 +118,10 @@ function getExternalReference(value: string) {
   return "";
 }
 
+function isUnsafeRemoteReference(value: string) {
+  return /^(https?:)?\/\//i.test(value.trim());
+}
+
 function isReferenceAttribute(name: string) {
   return ["href", "xlink:href", "src", "clip-path", "mask", "filter", "fill", "stroke"].includes(name);
 }
@@ -132,6 +136,10 @@ function sanitizeAttributeValue(name: string, value: string, report: SvgSanitiza
     const externalReference = getExternalReference(value.replace(/^url\(["']?|["']?\)$/g, ""));
     if (externalReference) {
       report.externalReferences.push(externalReference);
+      if (isUnsafeRemoteReference(externalReference)) {
+        report.removedAttributes.push(`${name}="${value}"`);
+        return null;
+      }
     }
   }
 

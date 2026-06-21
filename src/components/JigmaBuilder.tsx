@@ -1,4 +1,28 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { html as htmlLanguage } from "@codemirror/lang-html";
+import { css as cssLanguage } from "@codemirror/lang-css";
+import { javascript as javascriptLanguage } from "@codemirror/lang-javascript";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import {
+  bracketMatching,
+  defaultHighlightStyle,
+  foldGutter,
+  foldKeymap,
+  indentOnInput,
+  syntaxHighlighting,
+} from "@codemirror/language";
+import { EditorState, type Extension } from "@codemirror/state";
+import {
+  crosshairCursor,
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+} from "@codemirror/view";
 import {
   getTemplateByKey,
   templates,
@@ -83,12 +107,6 @@ interface LayerSnapshot {
 interface EditorMessage {
   kind: EditorKind | "preview" | "export";
   message: string;
-}
-
-interface EditorPasteEvent {
-  clipboardData?: DataTransfer | null;
-  currentTarget: EventTarget | null;
-  preventDefault: () => void;
 }
 
 interface ConversionIssue {
@@ -323,15 +341,151 @@ function getLayerBemText(node: LayerNode) {
   return node.tagName;
 }
 
+function getEditorLanguage(kind: EditorKind): Extension {
+  if (kind === "css") {
+    return cssLanguage();
+  }
+
+  if (kind === "js") {
+    return javascriptLanguage({ jsx: true, typescript: true });
+  }
+
+  return htmlLanguage();
+}
+
+const codeMirrorTheme = EditorView.theme({
+  "&": {
+    backgroundColor: "transparent",
+    color: "#dbeafe",
+    fontSize: "0.84rem",
+    height: "100%",
+  },
+  ".cm-scroller": {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    lineHeight: "1.62",
+    overflow: "auto",
+  },
+  ".cm-content": {
+    minHeight: "100%",
+    padding: "14px 16px",
+  },
+  ".cm-line": {
+    padding: "0 2px",
+  },
+  ".cm-gutters": {
+    backgroundColor: "rgba(3, 7, 18, 0.36)",
+    borderRight: "1px solid rgba(148, 163, 184, 0.12)",
+    color: "rgba(148, 163, 184, 0.58)",
+  },
+  ".cm-lineNumbers .cm-gutterElement": {
+    minWidth: "34px",
+    padding: "0 9px 0 0",
+  },
+  ".cm-activeLine, .cm-activeLineGutter": {
+    backgroundColor: "rgba(124, 58, 237, 0.12)",
+  },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+    backgroundColor: "rgba(45, 212, 191, 0.26)",
+  },
+  "&.cm-focused": {
+    outline: "none",
+  },
+}, { dark: true });
+
+const editorBaseSetup: Extension = [
+  lineNumbers(),
+  highlightActiveLineGutter(),
+  history(),
+  foldGutter(),
+  drawSelection(),
+  dropCursor(),
+  indentOnInput(),
+  syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+  bracketMatching(),
+  rectangularSelection(),
+  crosshairCursor(),
+  highlightActiveLine(),
+  keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap]),
+];
+
 function CodeEditor(props: {
   kind: EditorKind;
   label: string;
   badge?: string;
   value: string;
   onChange: (value: string) => void;
-  onPaste: (event: EditorPasteEvent) => void;
+  onPasteText: (value: string) => string;
 }) {
-  const lineCount = Math.max(1, props.value.split("\n").length);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const onChangeRef = useRef(props.onChange);
+  const onPasteTextRef = useRef(props.onPasteText);
+
+  useEffect(() => {
+    onChangeRef.current = props.onChange;
+    onPasteTextRef.current = props.onPasteText;
+  }, [props.onChange, props.onPasteText]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) {
+      return undefined;
+    }
+
+    const view = new EditorView({
+      parent: host,
+      state: EditorState.create({
+        doc: props.value,
+        extensions: [
+          editorBaseSetup,
+          getEditorLanguage(props.kind),
+          codeMirrorTheme,
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) {
+              onChangeRef.current(update.state.doc.toString());
+            }
+          }),
+          EditorView.domEventHandlers({
+            paste(event, editorView) {
+              const pastedText = event.clipboardData?.getData("text/plain");
+              if (typeof pastedText !== "string") {
+                return false;
+              }
+
+              event.preventDefault();
+              editorView.dispatch(editorView.state.replaceSelection(onPasteTextRef.current(pastedText)));
+              return true;
+            },
+          }),
+        ],
+      }),
+    });
+
+    viewRef.current = view;
+
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
+  }, [props.kind]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+
+    const currentValue = view.state.doc.toString();
+    if (props.value !== currentValue) {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: currentValue.length,
+          insert: props.value,
+        },
+      });
+    }
+  }, [props.value]);
 
   return (
     <section
@@ -342,18 +496,13 @@ function CodeEditor(props: {
       aria-label={`${props.label} source editor`}
     >
       <div className="code-editor-shell">
-        <div className="code-lines" aria-hidden="true">
-          {Array.from({ length: lineCount }, (_, index) => (
-            <span key={index}>{index + 1}</span>
-          ))}
-        </div>
-        <textarea
-          className="code-editor"
+        <div
+          ref={hostRef}
+          className="code-editor code-editor-host"
+          data-editor-library="codemirror-6"
+          data-editor-kind={props.kind}
+          role="textbox"
           spellCheck={false}
-          value={props.value}
-          onPaste={props.onPaste}
-          onChange={(event) =>
-            props.onChange((event.currentTarget as HTMLTextAreaElement).value)}
           aria-label={`${props.label} source`}
         />
       </div>
@@ -882,43 +1031,19 @@ export default function JigmaBuilder() {
     setMessages([{ kind, message: `${kind.toUpperCase()} source cleared.` }]);
   };
 
-  const handlePaste = (kind: EditorKind, event: EditorPasteEvent) => {
-    const pastedText = event.clipboardData?.getData("text/plain");
-    if (typeof pastedText !== "string") {
-      return;
-    }
-
-    const textarea = event.currentTarget as HTMLTextAreaElement | null;
-    if (!textarea) {
-      return;
-    }
-
+  const handlePasteText = (kind: EditorKind, pastedText: string) => {
     const cleanedText = kind === "html"
       ? sanitizeHtmlInput(pastedText)
       : kind === "css"
       ? sanitizeCssInput(pastedText)
       : sanitizeJsInput(pastedText);
-    const currentValue = textarea.value;
-    const selectionStart = textarea.selectionStart ?? currentValue.length;
-    const selectionEnd = textarea.selectionEnd ?? selectionStart;
-    const nextValue = currentValue.slice(0, selectionStart) +
-      cleanedText +
-      currentValue.slice(selectionEnd);
-
-    event.preventDefault();
-
-    setEditorValue(kind, nextValue);
     setStatus(
       cleanedText === pastedText
         ? `Pasted ${kind.toUpperCase()}`
         : `Cleaned pasted ${kind.toUpperCase()}`,
     );
 
-    const caretPosition = selectionStart + cleanedText.length;
-    setTimeout(() => {
-      textarea.selectionStart = caretPosition;
-      textarea.selectionEnd = caretPosition;
-    }, 0);
+    return cleanedText;
   };
 
   const activateLayer = (id: string) => {
@@ -1444,7 +1569,7 @@ export default function JigmaBuilder() {
                     badge={activeEditorDefinition.badge}
                     value={getEditorValue(activeEditorDefinition.kind)}
                     onChange={(value) => setEditorValue(activeEditorDefinition.kind, value)}
-                    onPaste={(event) => handlePaste(activeEditorDefinition.kind, event)}
+                    onPasteText={(value) => handlePasteText(activeEditorDefinition.kind, value)}
                   />
                 </div>
                 <div className="editor-foot">

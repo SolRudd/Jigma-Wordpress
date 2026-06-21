@@ -831,6 +831,7 @@ textarea::-webkit-scrollbar-thumb,
   display: grid;
   gap: 8px;
   grid-template-columns: minmax(0, 0.46fr) minmax(0, 0.54fr);
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
@@ -838,6 +839,7 @@ textarea::-webkit-scrollbar-thumb,
 .code-pane,
 .canvas-pane {
   display: grid;
+  height: 100%;
   min-height: 0;
 }
 
@@ -892,6 +894,7 @@ textarea::-webkit-scrollbar-thumb,
 }
 
 .source-editor-stack {
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   padding: 0;
@@ -900,6 +903,7 @@ textarea::-webkit-scrollbar-thumb,
 .editor-card {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
@@ -955,49 +959,45 @@ textarea::-webkit-scrollbar-thumb,
     linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
     #070b16;
   background-size: 44px 100%;
-  display: grid;
-  grid-template-columns: 46px minmax(0, 1fr);
+  display: block;
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
-.code-lines {
-  background: rgba(3, 7, 18, 0.36);
-  border-right: 1px solid rgba(148, 163, 184, 0.12);
-  color: rgba(148, 163, 184, 0.58);
-  display: flex;
-  flex-direction: column;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--code-editor-font-size);
-  line-height: var(--code-editor-line-height);
-  min-height: 100%;
-  overflow: hidden;
-  padding: 14px 9px 14px 0;
-  text-align: right;
-  user-select: none;
-}
-
-.code-lines span {
-  display: block;
-}
-
-.code-editor {
+.code-editor-host {
   background: transparent;
   border: 0;
   color: #dbeafe;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: var(--code-editor-font-size);
+  display: grid;
   height: 100%;
-  line-height: var(--code-editor-line-height);
   min-height: 0;
   outline: none;
-  overflow: auto;
-  padding: 14px 16px;
-  resize: none;
-  tab-size: 2;
-  white-space: pre;
+  overflow: hidden;
   width: 100%;
+}
+
+.code-editor-host .cm-editor {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-editor-host .cm-scroller {
+  max-height: 100%;
+  min-height: 0;
+  scrollbar-color: rgba(148, 163, 184, 0.28) transparent;
+  scrollbar-width: thin;
+}
+
+.code-editor-host .cm-scroller::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+
+.code-editor-host .cm-scroller::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
 }
 
 .editor-foot {

@@ -137,7 +137,10 @@ function pushGroupedWarning(
   warnings: ConversionWarning[],
   warning: ConversionWarning,
 ) {
-  const id = warning.id ?? warning.message;
+  const id = warning.id ??
+    [warning.code, warning.ownerElementId, warning.ownerLabel, warning.message]
+      .filter(Boolean)
+      .join(":");
   const existing = warnings.find((item) => (item.id ?? item.message) === id);
   if (existing) {
     existing.count = (existing.count ?? 1) + (warning.count ?? 1);
@@ -762,10 +765,13 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       unsignedSvgCodeCount += 1;
       const internalNodeCount = countSvgInternalNodes(element.rawHtml ?? "");
       const report = svgSanitization?.report;
-      const detailItems = [
+      const signatureDetails = [
         internalNodeCount > 0
           ? `Inline SVG contains ${internalNodeCount} internal SVG node${internalNodeCount === 1 ? "" : "s"} and was exported as one Bricks SVG element.`
           : "Inline SVG was exported as one Bricks SVG element.",
+        ...(report?.malformed ? ["SVG markup could not be parsed and requires manual review."] : []),
+      ];
+      const sanitizationDetails = [
         ...(report?.removedTags.length ? [`Removed tags: ${report.removedTags.join(", ")}`] : []),
         ...(report?.removedAttributes.length ? [`Removed attributes: ${report.removedAttributes.join(", ")}`] : []),
         ...(report?.externalReferences.length ? [`External references: ${report.externalReferences.join(", ")}`] : []),
@@ -773,7 +779,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       ];
 
       pushGroupedWarning(warnings, {
-        id: `svg-signature:${id}`,
+        id: `svg-signature:${id}:html`,
         code: "svg.signature_required",
         severity: report?.malformed ? "error" : "action-required",
         title: "Signature required after import",
@@ -781,9 +787,24 @@ export function createBricksExport(input: ConversionInput): BricksExport {
         message: `${bricksElement.label ?? "Inline SVG"} was preserved as one inline SVG element. Bricks signature required.`,
         ownerElementId: id,
         ownerLabel: bricksElement.label,
-        details: detailItems,
+        details: signatureDetails,
         suggestedAction: "After pasting into Bricks, review and sign this SVG through Bricks' code signature workflow.",
       });
+
+      if (sanitizationDetails.length > 0) {
+        pushGroupedWarning(warnings, {
+          id: `svg-sanitized:${id}:html`,
+          code: "svg.sanitized",
+          severity: report?.malformed ? "error" : "warning",
+          title: "SVG markup sanitized",
+          summary: `${bricksElement.label ?? "Inline SVG"} had unsafe or review-required SVG markup sanitized.`,
+          message: `${bricksElement.label ?? "Inline SVG"} had unsafe or review-required SVG markup sanitized.`,
+          ownerElementId: id,
+          ownerLabel: bricksElement.label,
+          details: sanitizationDetails,
+          suggestedAction: "Review the sanitized SVG markup before signing the SVG in Bricks.",
+        });
+      }
     }
 
     const directText = getOwnText(element, 500);
