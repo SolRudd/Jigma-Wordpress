@@ -26,7 +26,14 @@ import {
   PREVIEW_HOVER_INSPECTOR_ENABLED,
   createPreviewDocument,
 } from "../lib/preview/document.ts";
-import { getTemplateByKey, templates } from "../lib/templates.ts";
+import {
+  advancedTemplates,
+  getAdvancedTemplateByKey,
+  getTemplateByKey,
+  getTemplateCompositionByKey,
+  jigmaHeaderHeroComposition,
+  templates,
+} from "../lib/templates.ts";
 import JigmaBuilder, {
   AUTO_SCROLL_ENABLED,
   SOURCE_EDITOR_DEFINITIONS,
@@ -496,12 +503,10 @@ describe("Bricks export", () => {
     expect(templates.map((template) => template.name)).toEqual([
       "Jigma Header",
       "Jigma Hero",
-      "Jigma Proof Bar",
     ]);
 
     const header = getTemplateByKey("jigma-header");
     const hero = getTemplateByKey("jigma-hero");
-    const proofBar = getTemplateByKey("jigma-proof");
 
     expect(header?.html).toContain("jigma-header__toggle");
     expect(header?.html).toContain("jigma-header__logo-svg");
@@ -510,23 +515,55 @@ describe("Bricks export", () => {
     expect(header?.javascript).not.toContain("onclick");
     expect(header?.prefix).toBe("jigma");
     expect(header?.blockName).toBe("header");
-    expect(hero?.html).toContain("jigma-hero__mockup-svg");
+    expect(hero?.html).toContain("jigma-hero__visual-svg");
+    expect(hero?.html).not.toContain("jigma-hero__header");
+    expect(hero?.html).not.toContain("jigma-hero__nav");
+    expect(hero?.css).not.toContain(".jigma-hero__header");
+    expect(hero?.css).not.toContain(".jigma-hero__nav");
     expect(hero?.html).not.toContain("jigma-hero__rotator");
-    expect(hero?.html).not.toContain("jigma-hero__card");
     expect(hero?.css).not.toContain("@keyframes jh-rotate");
     expect(hero?.prefix).toBe("jigma");
     expect(hero?.blockName).toBe("hero");
-    expect(proofBar?.html).toContain("jigma-proof__value");
-    expect(proofBar?.html).toContain("jigma-proof__icon-svg");
-    expect(proofBar?.css).toContain(".jigma-proof__metrics");
-    expect(proofBar?.javascript).toBe("");
-    expect(proofBar?.prefix).toBe("jigma");
-    expect(proofBar?.blockName).toBe("proof");
-    expect(proofBar?.builderTarget).toBe("bricks");
-    expect(proofBar?.testedBreakpoints).toContain("390");
-    expect(hero?.css).toContain("font-weight: 900");
-    expect(templates).toHaveLength(3);
+    expect(hero?.css).toContain("--jh-grad-text");
+    expect(hero?.css).toContain("font-weight: 800");
+    expect(templates).toHaveLength(2);
     expect(getTemplateByKey("missing-template")).toBeNull();
+  });
+
+  it("keeps Header, Hero, fidelity, and composition sources separated", () => {
+    const header = getTemplateByKey("jigma-header")!;
+    const hero = getTemplateByKey("jigma-hero")!;
+    const fidelityHero = getAdvancedTemplateByKey("jigma-hero-fidelity")!;
+    const composition = getTemplateCompositionByKey("jigma-header-hero")!;
+
+    expect(advancedTemplates.map((template) => template.name)).toEqual([
+      "Jigma Hero Fidelity Stress Test",
+    ]);
+    expect(templates.some((template) => template.id === fidelityHero.id)).toBe(false);
+    expect(fidelityHero.category).toBe("Advanced");
+
+    [header, hero, fidelityHero].forEach((template) => {
+      expect(template.html).not.toMatch(/<!DOCTYPE|<html\b|<head\b|<body\b|<style\b|<script\b/i);
+      expect(template.css).not.toMatch(/<style|<\/style|<script|<\/script/i);
+      expect(template.javascript).not.toContain(".jigma-header {");
+      expect(template.javascript).not.toContain(".jigma-hero {");
+    });
+
+    expect(header.html).toContain("jigma-header__mobile-menu");
+    expect(header.javascript).toContain("aria-expanded");
+    expect(hero.html).not.toContain("jigma-header");
+    expect(hero.css).not.toContain("jigma-header");
+    expect(fidelityHero.html).not.toContain("jigma-hero__header");
+    expect(fidelityHero.css).not.toContain(".jigma-hero__header");
+
+    expect(composition).toBe(jigmaHeaderHeroComposition);
+    expect(composition.sources.map((source) => source.id)).toEqual([header.id, hero.id]);
+    expect(composition.html).toContain(header.html);
+    expect(composition.html).toContain(hero.html);
+    expect(composition.css.split(header.css).length - 1).toBe(1);
+    expect(composition.css.split(hero.css).length - 1).toBe(1);
+    expect(composition.javascript).toBe(header.javascript);
+    expect(composition.javascript).not.toContain("})();.jigma-header");
   });
 
   it("exports every production template as a valid native Bricks fixture", () => {
@@ -909,8 +946,8 @@ describe("Bricks export", () => {
     expect(markup).toContain("Preview");
     expect(markup).toContain("Inspect");
     expect(markup).toContain("Template Library");
+    expect(markup).toContain("Jigma Header");
     expect(markup).toContain("Hero");
-    expect(markup).toContain("Proof Bar");
     expect(markup).toContain("Reset Template");
     expect(markup).toContain("Save Preset locally");
     expect(markup).toContain("Load Preset locally");
@@ -943,8 +980,8 @@ describe("Bricks export", () => {
     );
 
     expect(markup).toContain("Template Library");
+    expect(markup).toContain("Jigma Header");
     expect(markup).toContain("Jigma Hero");
-    expect(markup).toContain("Proof Bar");
     expect(markup).toContain("Reset Template");
     expect(markup).toContain('role="tablist" aria-label="Source editors"');
     expect(markup).toContain('id="source-tab-html"');
