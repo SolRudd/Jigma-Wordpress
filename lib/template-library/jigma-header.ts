@@ -1,4 +1,5 @@
 import type { JigmaTemplateSource } from "./types.ts";
+import { jigmaLogoSvg } from "./jigma-logo.ts";
 
 export const jigmaHeaderTemplate: JigmaTemplateSource = {
   id: "jigma-header",
@@ -15,15 +16,7 @@ export const jigmaHeaderTemplate: JigmaTemplateSource = {
   html: `<header class="jigma-header">
   <div class="jigma-header__inner">
     <a class="jigma-header__brand" href="#top" aria-label="Jigma home">
-      <svg class="jigma-header__logo-svg" viewBox="0 0 48 48" role="img" aria-label="Jigma Logo">
-        <rect x="6" y="14" width="36" height="26" rx="10" fill="#8b55d9"></rect>
-        <path d="M13 24h22v8H13z" fill="#06060d"></path>
-        <circle cx="17" cy="28" r="2.5" fill="#34e0d0"></circle>
-        <circle cx="31" cy="28" r="2.5" fill="#34e0d0"></circle>
-        <path d="M15 14 10 7m23 7 5-7" stroke="#a96bff" stroke-width="4" stroke-linecap="round"></path>
-        <path d="M18 35c3 2 9 2 12 0" stroke="#eef0fb" stroke-width="2.5" stroke-linecap="round"></path>
-      </svg>
-      <span class="jigma-header__wordmark">Jigma</span>
+      ${jigmaLogoSvg}
     </a>
     <nav class="jigma-header__nav" aria-label="Primary navigation">
       <a class="jigma-header__nav-link" href="#features">Features</a>
@@ -31,7 +24,10 @@ export const jigmaHeaderTemplate: JigmaTemplateSource = {
       <a class="jigma-header__nav-link" href="#pricing">Pricing</a>
       <a class="jigma-header__nav-link" href="#docs">Docs</a>
     </nav>
-    <a class="jigma-header__cta" href="#convert">Start converting</a>
+    <a class="jigma-header__cta" href="#convert">
+      <span class="jigma-header__cta-label">Start converting</span>
+      <span class="jigma-header__cta-arrow" aria-hidden="true">→</span>
+    </a>
     <button class="jigma-header__toggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="jigma-header-menu">
       <span class="jigma-header__toggle-line"></span>
       <span class="jigma-header__toggle-line"></span>
@@ -43,7 +39,10 @@ export const jigmaHeaderTemplate: JigmaTemplateSource = {
     <a class="jigma-header__nav-link" href="#templates">Templates</a>
     <a class="jigma-header__nav-link" href="#pricing">Pricing</a>
     <a class="jigma-header__nav-link" href="#docs">Docs</a>
-    <a class="jigma-header__cta" href="#convert">Start converting</a>
+    <a class="jigma-header__cta" href="#convert">
+      <span class="jigma-header__cta-label">Start converting</span>
+      <span class="jigma-header__cta-arrow" aria-hidden="true">→</span>
+    </a>
   </nav>
 </header>`,
   css: `.jigma-header {
@@ -63,23 +62,20 @@ export const jigmaHeaderTemplate: JigmaTemplateSource = {
   --jigma-teal: #34e0d0;
   position: relative;
   z-index: 20;
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 18px 22px;
+  width: 100%;
+  padding: 24px clamp(22px, 4vw, 54px);
   color: var(--jigma-text);
+  background: rgba(6, 6, 13, 0.96);
+  border-bottom: 1px solid rgba(170, 176, 212, 0.12);
 }
 
 .jigma-header__inner {
+  max-width: 1500px;
+  margin: 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 22px;
-  padding: 12px 14px;
-  border: 1px solid rgba(170, 176, 212, 0.16);
-  border-radius: 24px;
-  background: rgba(14, 14, 31, 0.78);
-  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.26);
-  backdrop-filter: blur(18px);
+  gap: clamp(22px, 4vw, 54px);
 }
 
 .jigma-header__brand {
@@ -92,27 +88,21 @@ export const jigmaHeaderTemplate: JigmaTemplateSource = {
 }
 
 .jigma-header__logo-svg {
-  width: 42px;
-  height: 42px;
+  width: min(210px, 38vw);
+  height: auto;
   flex: 0 0 auto;
-}
-
-.jigma-header__wordmark {
-  font-size: 24px;
-  letter-spacing: -0.02em;
 }
 
 .jigma-header__nav {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: clamp(22px, 4vw, 62px);
 }
 
 .jigma-header__nav-link {
-  padding: 10px 12px;
+  padding: 10px 0;
   color: var(--jigma-text-soft);
-  border-radius: 999px;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 760;
   text-decoration: none;
 }
@@ -120,21 +110,27 @@ export const jigmaHeaderTemplate: JigmaTemplateSource = {
 .jigma-header__nav-link:hover,
 .jigma-header__nav-link:focus-visible {
   color: var(--jigma-text);
-  background: rgba(255, 255, 255, 0.07);
+  opacity: 0.92;
 }
 
 .jigma-header__cta {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 42px;
-  padding: 0 16px;
+  gap: 10px;
+  min-height: 54px;
+  padding: 0 22px;
   color: #ffffff;
-  border-radius: 999px;
+  border-radius: 12px;
   background: linear-gradient(135deg, var(--jigma-violet-bright), var(--jigma-blue-bright));
-  box-shadow: 0 14px 34px rgba(79, 140, 255, 0.24);
+  box-shadow: 0 18px 42px rgba(79, 140, 255, 0.26);
   font-weight: 850;
   text-decoration: none;
+}
+
+.jigma-header__cta-arrow {
+  font-size: 22px;
+  line-height: 1;
 }
 
 .jigma-header__toggle {

@@ -405,11 +405,6 @@ describe("Bricks export", () => {
       "Jigma Header",
       "Jigma Hero",
       "Jigma Proof Bar",
-      "Services",
-      "iPhone/Product Showcase",
-      "Pricing",
-      "Testimonials",
-      "CTA",
     ]);
 
     const header = getTemplateByKey("jigma-header");
@@ -418,6 +413,7 @@ describe("Bricks export", () => {
 
     expect(header?.html).toContain("jigma-header__toggle");
     expect(header?.html).toContain("jigma-header__logo-svg");
+    expect(header?.html).not.toContain("jigma-header__wordmark");
     expect(header?.javascript).toContain("aria-expanded");
     expect(header?.javascript).not.toContain("onclick");
     expect(header?.prefix).toBe("jigma");
@@ -437,10 +433,7 @@ describe("Bricks export", () => {
     expect(proofBar?.builderTarget).toBe("bricks");
     expect(proofBar?.testedBreakpoints).toContain("390");
     expect(hero?.css).toContain("font-weight: 900");
-    expect(getTemplateByKey("services")?.html).toContain("Code to Builder");
-    expect(getTemplateByKey("services")?.html).toContain("Clean BEM Classes");
-    expect(getTemplateByKey("services")?.html).toContain("Native Styling");
-    expect(getTemplateByKey("product-showcase")?.html).toContain("Copy Bricks Structure");
+    expect(templates).toHaveLength(3);
     expect(getTemplateByKey("missing-template")).toBeNull();
   });
 

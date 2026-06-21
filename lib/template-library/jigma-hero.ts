@@ -22,22 +22,22 @@ export const jigmaHeroTemplate: JigmaTemplateSource = {
           Code to Bricks
         </p>
         <h1 class="jigma-hero__title" id="jigma-hero-title">
-          <span class="jigma-hero__title-line">Convert frontend</span>
+          <span class="jigma-hero__title-line">Turn clean code</span>
+          <span class="jigma-hero__title-line">into <span class="jigma-hero__grad">editable Bricks</span></span>
           <span class="jigma-hero__title-line">
             <span class="jigma-hero__rotator" aria-label="sections layouts templates">
               <span class="jigma-hero__rotator-list">
-                <span class="jigma-hero__rotator-item">sections</span>
-                <span class="jigma-hero__rotator-item">layouts</span>
-                <span class="jigma-hero__rotator-item">templates</span>
+                <span class="jigma-hero__rotator-item">sections.</span>
+                <span class="jigma-hero__rotator-item">layouts.</span>
+                <span class="jigma-hero__rotator-item">templates.</span>
               </span>
             </span>
-            into <span class="jigma-hero__grad">editable Bricks</span>
           </span>
         </h1>
-        <p class="jigma-hero__lead">Paste HTML, CSS and optional JavaScript. Jigma previews the result, builds clean BEM classes, and exports a Bricks-ready structure you can keep editing.</p>
+        <p class="jigma-hero__lead">Paste HTML and CSS. Jigma maps the structure, cleans the classes, and gives you a Bricks-ready section you can actually use.</p>
         <div class="jigma-hero__actions">
           <a class="jigma-hero__btn jigma-hero__btn--primary" href="#convert">Start converting</a>
-          <a class="jigma-hero__btn jigma-hero__btn--ghost" href="#example">View example</a>
+          <a class="jigma-hero__btn jigma-hero__btn--ghost" href="#example">View live preview</a>
         </div>
         <div class="jigma-hero__stats" aria-label="Jigma conversion metrics">
           <div class="jigma-hero__stat">
@@ -444,4 +444,3 @@ export const jigmaHeroTemplate: JigmaTemplateSource = {
 }`,
   javascript: "",
 };
-
