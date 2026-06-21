@@ -39,6 +39,7 @@ export interface ElementCssResult {
 export interface ElementCssOptions {
   minify?: boolean;
   classFallbackStrategy?: "bricks-class-root" | "literal-bem";
+  literalOnly?: boolean;
 }
 
 interface CssBlock {
@@ -1466,21 +1467,11 @@ export function attachCssToGlobalClasses(
       if (/^@media\b/i.test(block.selector)) {
         responsiveRuleCount += 1;
         processBlocks(block.body, block.selector);
-        pushWarning(
-          warnings,
-          `Responsive rule "${block.selector}" was preserved on matching Bricks classes.`,
-          "info",
-        );
         return;
       }
 
       if (/^@(?:container|supports)\b/i.test(block.selector)) {
         processBlocks(block.body, block.selector);
-        pushWarning(
-          warnings,
-          `At-rule "${block.selector}" was preserved in class-owned fallback CSS where native mapping was unavailable.`,
-          "info",
-        );
         return;
       }
 
@@ -1558,6 +1549,31 @@ export function attachCssToGlobalClasses(
         if (pseudo.suffix) {
           pseudoSelectorCount += 1;
           pseudoRuleCount += 1;
+        }
+
+        if (options.literalOnly) {
+          const owner = getOwningClassTarget(selector, classMap);
+          const tokens = getSelectorClassTokens(selector);
+          const missingTokens = tokens.filter((token) => !getPreferredClassTarget(token.className, classMap));
+          if (!owner || missingTokens.length > 0) {
+            unmappedRuleCount += 1;
+            pushWarning(
+              warnings,
+              `Selector "${selector}" could not be assigned to a preserved Bricks class. Missing: ${missingTokens.map((token) => `.${token.className}`).join(", ") || "owning class"}.`,
+            );
+            return;
+          }
+
+          addLiteralFallback(
+            owner,
+            selector,
+            declarations.map(formatDeclaration).join("\n"),
+            mediaSelector,
+          );
+          customCssFallbackCount += declarations.length;
+          styledClassIds.add(owner.globalClass.id);
+          attachedRuleCount += 1;
+          return;
         }
 
         if (selectorNeedsScopedFallback(selector) || pseudo.unsupported) {

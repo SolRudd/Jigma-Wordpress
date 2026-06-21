@@ -2,7 +2,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createBricksExport, TARGET_BRICKS_VERSION } from "../lib/bricks/export.ts";
+import {
+  createBricksExport,
+  serializeBricksClipboardPayload,
+  serializeJigmaDebugReport,
+  TARGET_BRICKS_VERSION,
+} from "../lib/bricks/export.ts";
 import { createAssetManifest } from "../lib/assets/manifest.ts";
 import { BRICKS_ELEMENT_CUSTOM_CSS_FIELD } from "../lib/css/element.ts";
 import { inspectDependencies } from "../lib/dependencies/inspect.ts";
@@ -58,6 +63,7 @@ import { sectionFixtures } from "./fixtures/sections.ts";
 const defaultOptions: OutputOptions = {
   stylingMode: "bem-css",
   exportMode: "native-bem-classes",
+  exportProfile: "native-controls-experimental",
   classMode: "strict-bem",
   projectPrefix: "acme",
   blockName: "section",
@@ -65,6 +71,31 @@ const defaultOptions: OutputOptions = {
   includeExternalCss: false,
   includeExternalScripts: false,
   minifyElementCss: false,
+};
+
+const featureCtaHtml = readFileSync(
+  new URL("./fixtures/feature-cta/source.html", import.meta.url),
+  "utf8",
+);
+const featureCtaCss = readFileSync(
+  new URL("./fixtures/feature-cta/source.css", import.meta.url),
+  "utf8",
+);
+const featureCtaReference = JSON.parse(readFileSync(
+  new URL("./fixtures/feature-cta/working-reference.json", import.meta.url),
+  "utf8",
+)) as {
+  content: Array<{ name: string; children: unknown[]; label?: string; settings: Record<string, unknown> }>;
+  globalClasses: Array<{ name: string }>;
+  globalElements: unknown[];
+};
+
+const compatibilityOptions: Partial<OutputOptions> = {
+  exportProfile: "bricks-compatibility",
+  exportMode: "native-bem-classes",
+  classMode: "strict-bem",
+  projectPrefix: "jg",
+  blockName: "section",
 };
 
 const heroPasteHtml = `<section class="hero-section">
@@ -313,6 +344,148 @@ function getElementGlobalClassNames(
 }
 
 describe("Bricks export", () => {
+  it("matches the Feature CTA Bricks Compatibility reference structure", () => {
+    const result = exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions);
+    const clipboard = serializeBricksClipboardPayload(result);
+    const heading = result.content.find((element) => element.name === "heading");
+    const paragraph = result.content.find((element) => element.name === "text-basic");
+    const link = result.content.find((element) => element.name === "text-link");
+    const section = result.content.find((element) => element.name === "section");
+    const classNames = result.globalClasses?.map((entry) => entry.name) ?? [];
+
+    expect(result.content.map((element) => element.name)).toEqual(
+      featureCtaReference.content.map((element) => element.name),
+    );
+    expect(result.content).toHaveLength(6);
+    expect(result.globalClasses).toHaveLength(6);
+    expect(classNames).toEqual([
+      "lit-feature-cta",
+      "lit-feature-cta__inner",
+      "lit-feature-cta__content",
+      "lit-feature-cta__title",
+      "lit-feature-cta__text",
+      "lit-feature-cta__link",
+    ]);
+    expect(classNames).not.toContain("lit-feature-cta__element");
+
+    expect(section?.children).toHaveLength(1);
+    expect(result.content[1].children).toEqual([result.content[2].id]);
+    expect(result.content[2].children).toEqual([
+      heading?.id,
+      paragraph?.id,
+      link?.id,
+    ]);
+
+    expect(heading?.children).toEqual([]);
+    expect(heading?.settings.tag).toBe("h2");
+    expect(heading?.settings._cssId).toBe("lit-feature-cta-title");
+    expect(heading?.settings.text).toBe("A Sustainable Future:<br>\nSmall Steps, Big Impact");
+    expect(JSON.stringify(result.content)).not.toContain("lit-feature-cta__element");
+    expect(result.warnings.some((warning) => /br/i.test(warning.message))).toBe(false);
+
+    expect(paragraph?.children).toEqual([]);
+    expect(paragraph?.settings.tag).toBe("p");
+    expect(`${paragraph?.settings.text ?? ""}`).toContain("Better choices compound over time.");
+
+    expect(link?.children).toEqual([]);
+    expect(link?.settings.text).toBe('Find out more <span aria-hidden="true">→</span>');
+    expect(link?.settings.link).toEqual({ type: "internal", url: "#" });
+
+    expect(section?.settings._attributes).toEqual([
+      { name: "aria-labelledby", value: "lit-feature-cta-title" },
+    ]);
+    expect(result.content.some((element) => element.settings._cssId === "lit-feature-cta-title"))
+      .toBe(true);
+
+    expect(clipboard.globalElements).toEqual(featureCtaReference.globalElements);
+    expect(Object.keys(clipboard).sort()).toEqual([
+      "content",
+      "globalClasses",
+      "globalElements",
+      "source",
+      "sourceUrl",
+      "version",
+    ]);
+    expect(JSON.stringify(clipboard)).not.toContain("jigmaMeta");
+    expect(JSON.stringify(clipboard)).not.toContain("validation");
+    expect(JSON.stringify(clipboard)).not.toContain("warnings");
+    expect(clipboard.sourceUrl).toBe("jigma.local");
+    expect(clipboard.version).toBe(TARGET_BRICKS_VERSION);
+  });
+
+  it("preserves Feature CTA literal class CSS without native-control leakage", () => {
+    const result = exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions);
+    const allCss = getAllClassCustomCss(result);
+    const innerCss = getGlobalClassCss(result, "lit-feature-cta__inner");
+    const titleCss = getGlobalClassCss(result, "lit-feature-cta__title");
+    const linkCss = getGlobalClassCss(result, "lit-feature-cta__link");
+
+    expect(allCss).toContain(".lit-feature-cta__inner::before {");
+    expect(allCss).toContain(".lit-feature-cta__inner::after {");
+    expect(allCss).toContain("@media (max-width: 820px)");
+    expect(allCss).toContain("forest-desktop.webp");
+    expect(allCss).toContain("forest-tablet.webp");
+    expect(allCss).toContain("forest-mobile.webp");
+    expect(allCss).not.toContain("%root%");
+    expect(allCss).not.toContain("#brxe-");
+    expect(result.content.some((element) => element.name === "image")).toBe(false);
+
+    expect(innerCss).toContain(".lit-feature-cta__inner {");
+    expect(innerCss).toContain(".lit-feature-cta__inner::before {");
+    expect(titleCss).toContain(".lit-feature-cta__title {");
+    expect(linkCss).toContain(".lit-feature-cta__link:hover {");
+    expect(linkCss).toContain(".lit-feature-cta__link span {");
+
+    expect(getGlobalClassSettings(result, "lit-feature-cta__title")._typography).toBeUndefined();
+    expect(result.validation.nativeStyleMappedCount).toBe(0);
+    expect(result.validation.customCssFallbackCount).toBeGreaterThan(0);
+    expect(result.warnings.filter((warning) => warning.severity !== "info")).toEqual([]);
+  });
+
+  it("keeps Compatibility and Native Controls Experimental profiles isolated", () => {
+    const compatibility = exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions);
+    const nativeControls = exportFor(featureCtaHtml, featureCtaCss, "", {
+      exportProfile: "native-controls-experimental",
+      exportMode: "native-bem-classes",
+      classMode: "strict-bem",
+      projectPrefix: "jg",
+      blockName: "feature-cta",
+    });
+
+    expect(getGlobalClassSettings(compatibility, "lit-feature-cta__title")._typography).toBeUndefined();
+    expect(getGlobalClassSettings(nativeControls, "lit-feature-cta__title")._typography).toBeDefined();
+    expect(getGlobalClassCss(compatibility, "lit-feature-cta__inner")).toContain(".lit-feature-cta__inner::before");
+    expect(nativeControls.validation.nativeStyleMappedCount).toBeGreaterThan(compatibility.validation.nativeStyleMappedCount);
+    expect(nativeControls.validation.customCssFallbackCount).toBeLessThan(compatibility.validation.customCssFallbackCount);
+  });
+
+  it("keeps Jigma diagnostics out of the clipboard and available in the debug report", () => {
+    const result = exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions);
+    const clipboard = serializeBricksClipboardPayload(result);
+    const debug = serializeJigmaDebugReport(result);
+
+    expect("jigmaMeta" in clipboard).toBe(false);
+    expect("validation" in clipboard).toBe(false);
+    expect("warnings" in clipboard).toBe(false);
+    expect(clipboard.globalElements).toEqual([]);
+    expect(debug.validation.totalElements).toBe(6);
+    expect(debug.assetManifest?.summary.overlaysMapped).toBeGreaterThan(0);
+    expect(debug.classAudit).toHaveLength(6);
+  });
+
+  it("groups valid Feature CTA responsive background URLs as one dependency family", () => {
+    const dependencies = inspectDependencies(featureCtaHtml, featureCtaCss, "");
+    const backgroundFamily = dependencies.find((dependency) =>
+      dependency.label === "External background image (3 responsive variants)"
+    );
+
+    expect(backgroundFamily).toBeDefined();
+    expect(backgroundFamily?.value).toContain("forest-desktop.webp");
+    expect(backgroundFamily?.value).toContain("forest-tablet.webp");
+    expect(backgroundFamily?.value).toContain("forest-mobile.webp");
+    expect(dependencies.filter((dependency) => dependency.value.includes("forest-"))).toHaveLength(1);
+  });
+
   it("defines the standalone HTML, CSS, and review-required JavaScript editors", () => {
     expect(SOURCE_EDITOR_DEFINITIONS).toHaveLength(3);
     expect(SOURCE_EDITOR_DEFINITIONS.map((editor) => editor.kind)).toEqual([
@@ -872,6 +1045,8 @@ describe("Bricks export", () => {
     expect(linkedElement.settings.link).toEqual({
       type: "external",
       url: "/gallery",
+      target: "_blank",
+      rel: "noopener",
     });
 
     const background = exportFor(mediaFixtures[4].html, mediaFixtures[4].css, "", {

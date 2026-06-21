@@ -13,7 +13,9 @@ import {
   getClassNames,
   getElementText,
   getOwnText,
+  hasOnlyPhrasingContent,
   getRenderableRoots,
+  serializeInlineContent,
   serializeElement,
 } from "../parser/html.ts";
 import { createAssetManifest } from "../assets/manifest.ts";
@@ -52,6 +54,19 @@ const HIDDEN_STRUCTURE_TAGS = new Set([
 ]);
 
 const TEXT_TAGS = new Set(["p", "span", "strong", "em", "small", "b", "i", "mark", "li"]);
+const CLASS_OWNED_PHRASING_TAGS = new Set([
+  "abbr",
+  "b",
+  "code",
+  "em",
+  "i",
+  "mark",
+  "small",
+  "span",
+  "strong",
+  "sub",
+  "sup",
+]);
 const WRAPPER_TAGS = new Set(["div", "article", "header", "main", "footer", "nav", "aside", "ul", "ol"]);
 const SEMANTIC_WRAPPER_TAGS = new Set(["header", "main", "footer", "nav", "article", "aside", "figure", "ul", "ol"]);
 const NON_NESTABLE_BRICKS_ELEMENTS = new Set([
@@ -99,6 +114,18 @@ const SUPPORTED_TAGS = new Set([
   "code",
   "figure",
 ]);
+
+const PRESERVED_ATTRIBUTE_NAMES = new Set([
+  "decoding",
+  "hidden",
+  "loading",
+  "role",
+  "title",
+  "width",
+  "height",
+]);
+
+const CONSUMED_ATTRIBUTE_NAMES = new Set(["class", "href", "id", "rel", "target"]);
 
 interface PendingElement {
   element: BricksElement;
@@ -194,6 +221,12 @@ function escapeHtmlText(value: string) {
     .replaceAll(">", "&gt;");
 }
 
+function isPreservedAttribute(name: string) {
+  return PRESERVED_ATTRIBUTE_NAMES.has(name) ||
+    name.startsWith("aria-") ||
+    name.startsWith("data-");
+}
+
 function isValidClassName(className: string) {
   return /^-?[_a-zA-Z]+[_a-zA-Z0-9-]*$/.test(className);
 }
@@ -207,6 +240,14 @@ function hasOnlyMediaChildren(element: ParsedElement) {
   return children.length > 0 && children.every((child) => child.tagName === "img" || child.tagName === "picture");
 }
 
+function hasClassedPhrasingChild(element: ParsedElement): boolean {
+  return element.children.some((child) =>
+    !HIDDEN_STRUCTURE_TAGS.has(child.tagName) &&
+    CLASS_OWNED_PHRASING_TAGS.has(child.tagName) &&
+    (getClassNames(child).length > 0 || hasClassedPhrasingChild(child))
+  );
+}
+
 function getBricksMapping(element: ParsedElement) {
   const tag = element.tagName;
   const text = getOwnText(element, 500);
@@ -217,7 +258,7 @@ function getBricksMapping(element: ParsedElement) {
   }
 
   if (/^h[1-6]$/.test(tag)) {
-    if (hasChildren) {
+    if (hasChildren && (!hasOnlyPhrasingContent(element) || hasClassedPhrasingChild(element))) {
       return { name: "div", supported: true, semanticTag: tag, generatedWrapper: true };
     }
 
@@ -237,7 +278,10 @@ function getBricksMapping(element: ParsedElement) {
   }
 
   if (tag === "a") {
-    if (hasChildren && !hasOnlyMediaChildren(element)) {
+    if (
+      hasChildren &&
+      ((!hasOnlyPhrasingContent(element) && !hasOnlyMediaChildren(element)) || hasClassedPhrasingChild(element))
+    ) {
       return { name: "div", supported: true, semanticTag: "a", generatedWrapper: true };
     }
 
@@ -245,7 +289,7 @@ function getBricksMapping(element: ParsedElement) {
   }
 
   if (tag === "button") {
-    if (hasChildren) {
+    if (hasChildren && (!hasOnlyPhrasingContent(element) || hasClassedPhrasingChild(element))) {
       return { name: "div", supported: true, semanticTag: "button", generatedWrapper: true };
     }
 
@@ -256,7 +300,7 @@ function getBricksMapping(element: ParsedElement) {
     return { name: "svg", supported: true };
   }
 
-  if (TEXT_TAGS.has(tag) && element.children.length === 0 && text) {
+  if (TEXT_TAGS.has(tag) && hasOnlyPhrasingContent(element) && !hasClassedPhrasingChild(element) && text) {
     return { name: "text-basic", supported: true };
   }
 
@@ -282,13 +326,30 @@ function getAttributeSettings(element: ParsedElement) {
     settings._cssId = element.attributes.id;
   }
 
+  const attributes = Object.entries(element.attributes)
+    .filter(([name, value]) =>
+      value !== undefined &&
+      !CONSUMED_ATTRIBUTE_NAMES.has(name) &&
+      isPreservedAttribute(name)
+    )
+    .map(([name, value]) => ({ name, value }));
+
+  if (attributes.length > 0) {
+    settings._attributes = attributes;
+  }
+
   return settings;
 }
 
 function getContentSettings(element: ParsedElement, name: string, semanticTag?: string) {
   const settings: Record<string, unknown> = {};
   const tag = element.tagName;
-  const text = (name === "heading" || name === "text-link" || name === "button")
+  const text = (
+      (name === "heading" || name === "text-link" || name === "button" || name === "text-basic") &&
+      hasOnlyPhrasingContent(element)
+    )
+    ? serializeInlineContent(element)
+    : (name === "heading" || name === "text-link" || name === "button")
     ? getElementText(element).replace(/\s+/g, " ").trim()
     : getOwnText(element, 500);
 
@@ -317,6 +378,8 @@ function getContentSettings(element: ParsedElement, name: string, semanticTag?: 
       settings.link = {
         type: href.startsWith("#") ? "internal" : "external",
         url: href,
+        ...(element.attributes.target ? { target: element.attributes.target } : {}),
+        ...(element.attributes.rel ? { rel: element.attributes.rel } : {}),
       };
     }
   }
@@ -438,6 +501,43 @@ function makePreservedOriginalClassList(originalClasses: string[], warnings: Con
     }
     return valid;
   });
+}
+
+function makeCompatibilityClassList(originalClasses: string[], warnings: ConversionWarning[]) {
+  return Array.from(new Set(makePreservedOriginalClassList(originalClasses, warnings)));
+}
+
+function createCompatibilityElementLabel(element: ParsedElement, bricksName: string) {
+  if (element.attributes.id) {
+    return `#${element.attributes.id}`;
+  }
+
+  const firstClass = getClassNames(element).find(isValidClassName);
+  if (firstClass) {
+    return `.${firstClass}`;
+  }
+
+  if (bricksName === "heading" && /^h[1-6]$/.test(element.tagName)) {
+    return `Heading ${element.tagName.slice(1)}`;
+  }
+
+  if (bricksName === "text-link" || element.tagName === "a") {
+    return "Link";
+  }
+
+  if (bricksName === "text-basic" || element.tagName === "p") {
+    return "Paragraph";
+  }
+
+  if (element.tagName === "section") {
+    return "Section";
+  }
+
+  if (element.tagName === "div") {
+    return "Div";
+  }
+
+  return titleCaseWords(element.tagName || bricksName || "Element");
 }
 
 function buildExternalCode(
@@ -828,11 +928,13 @@ function createClassCssTargets(
 export function createBricksExport(input: ConversionInput): BricksExport {
   const warnings: ConversionWarning[] = [];
   const conversionProfile = input.options.conversionProfile ?? "clean-native";
+  const exportProfile = input.options.exportProfile ?? "native-controls-experimental";
+  const compatibilityProfile = exportProfile === "bricks-compatibility";
   const exportMode = input.options.exportMode;
-  const shouldCreateNativeBemClasses = isNativeBemClassMode(exportMode);
-  const shouldAttachElementCss = exportMode === "element-styles";
-  const shouldCreateGlobalClasses = shouldCreateNativeBemClasses;
-  const shouldCreateScopedCssBlock = exportMode === "scoped-css-block";
+  const shouldCreateNativeBemClasses = compatibilityProfile || isNativeBemClassMode(exportMode);
+  const shouldAttachElementCss = !compatibilityProfile && exportMode === "element-styles";
+  const shouldCreateGlobalClasses = compatibilityProfile || shouldCreateNativeBemClasses;
+  const shouldCreateScopedCssBlock = !compatibilityProfile && exportMode === "scoped-css-block";
   const assetManifest = createAssetManifest(input);
   const parsed = getRenderableRoots(input.html);
   const deletedLayerIds = input.deletedLayerIds ?? new Set<string>();
@@ -858,7 +960,14 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   let unsignedJavaScriptCodeCount = 0;
   let generatedWrapperCount = 0;
 
-  assetManifest.warnings.forEach((warning) => pushGroupedWarning(warnings, warning));
+  assetManifest.warnings
+    .filter((warning) =>
+      !compatibilityProfile ||
+      warning.severity === "error" ||
+      warning.severity === "action-required" ||
+      warning.code === "code.inline_event_handler"
+    )
+    .forEach((warning) => pushGroupedWarning(warnings, warning));
   parsed.warnings.forEach((warning) => pushWarning(warnings, warning));
 
   if (input.options.stylingMode === "native-experimental") {
@@ -895,17 +1004,19 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     const originalClasses = Array.from(new Set(getClassNames(element)));
     const assignment = bemFactory.create(element, path, parent);
     const id = makeStableId(`${path}:${element.tagName}:${assignment.className}:${getOwnText(element, 64)}`);
-    const classList = makeClassList(
-      input.options.classMode,
-      assignment.className,
-      originalClasses,
-      warnings,
-      bemFactory.blockName,
-    ).filter((className) =>
-      conversionProfile === "fidelity" ||
-      !shouldSkipGeneratedClass(element, mapping.name, originalClasses) ||
-      originalClasses.includes(className)
-    );
+    const classList = compatibilityProfile
+      ? makeCompatibilityClassList(originalClasses, warnings)
+      : makeClassList(
+        input.options.classMode,
+        assignment.className,
+        originalClasses,
+        warnings,
+        bemFactory.blockName,
+      ).filter((className) =>
+        conversionProfile === "fidelity" ||
+        !shouldSkipGeneratedClass(element, mapping.name, originalClasses) ||
+        originalClasses.includes(className)
+      );
     const svgSanitization = mapping.name === "svg"
       ? sanitizeSvgMarkup(element.rawHtml ?? serializeElement(element, { path: "svg", skipScripts: true }))
       : null;
@@ -922,7 +1033,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       const preservedClasses = input.options.classMode === "strict-bem"
         ? []
         : makePreservedOriginalClassList(originalClasses, warnings);
-      if (preservedClasses.length > 0) {
+      if (!compatibilityProfile && preservedClasses.length > 0) {
         settings._cssClasses = preservedClasses.join(" ");
       }
     } else {
@@ -931,7 +1042,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
 
     classAttachmentCount += classList.length;
 
-    if (input.options.classMode !== "strict-bem" && originalClasses.length > 0) {
+    if (!compatibilityProfile && input.options.classMode !== "strict-bem" && originalClasses.length > 0) {
       pushWarning(warnings, "Original classes were preserved in _cssClasses because strict BEM mode is off.", "info");
     }
 
@@ -940,17 +1051,20 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     }
 
     const parentElement = parent === 0 ? undefined : contentById.get(parent);
+    const elementLabel = compatibilityProfile
+      ? createCompatibilityElementLabel(element, mapping.name)
+      : createBricksElementLabel({
+        bemClass: getLabelClass(assignment, classList),
+        tagName: element.tagName,
+        parentLabel: parentElement?.label,
+      });
     const bricksElement: BricksElement = applyBricksElementLabel({
       id,
       name: mapping.name,
       parent,
       children: [],
       settings,
-    }, createBricksElementLabel({
-      bemClass: getLabelClass(assignment, classList),
-      tagName: element.tagName,
-      parentLabel: parentElement?.label,
-    }));
+    }, elementLabel);
     content.push(bricksElement);
     contentById.set(id, bricksElement);
     classListByElementId.set(id, classList);
@@ -1134,7 +1248,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     ? attachCssToGlobalClasses(
       input.css,
       createClassCssTargets(pendingElements, globalClassIdMap, globalClassById),
-      { minify: input.options.minifyElementCss },
+      { minify: input.options.minifyElementCss, literalOnly: compatibilityProfile },
     )
     : {
       warnings: [],
@@ -1276,7 +1390,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     });
   }
 
-  if (externalCode.dependencies.length > 0) {
+  if (!compatibilityProfile && externalCode.dependencies.length > 0) {
     pushWarning(
       warnings,
       `${externalCode.dependencies.length} dependency item(s) were detected. Review before pasting into Bricks.`,
@@ -1324,7 +1438,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     structureValidation.invalidNestingCount > 0 ? "invalid-nesting" : "",
   ].filter(Boolean);
 
-  if (conversionProfile === "clean-native" && cleanNativeThresholdsExceeded.length > 0) {
+  if (!compatibilityProfile && conversionProfile === "clean-native" && cleanNativeThresholdsExceeded.length > 0) {
     pushGroupedWarning(warnings, {
       id: "clean-native-complexity",
       code: "conversion.complexity",
@@ -1351,6 +1465,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       label: "Jigma strict BEM Bricks structure",
       targetBricksVersion: TARGET_BRICKS_VERSION,
       stylingMode: shouldCreateNativeBemClasses ? "native-bricks-classes" : input.options.stylingMode,
+      exportProfile,
       conversionProfile,
       complexity: {
         elementCount: content.length,
@@ -1369,7 +1484,9 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       notes: [
         `Generated BEM block: ${bemFactory.blockName}.`,
         shouldCreateNativeBemClasses
-          ? "Generated BEM classes are native editable Bricks classes assigned by ID."
+          ? compatibilityProfile
+            ? "Source classes are preserved as Bricks classes assigned by ID."
+            : "Generated BEM classes are native editable Bricks classes assigned by ID."
           : "Generated BEM classes are attached directly as element classes.",
         shouldCreateScopedCssBlock
           ? "CSS was exported as a scoped generated CSS block."
@@ -1429,10 +1546,38 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       overlayMappedCount: assetManifest.summary.overlaysMapped,
       failedAssetCount: assetManifest.summary.failedAssets,
       conversionProfile,
+      exportProfile,
       actionRequiredWarningCount: finalActionRequiredWarningCount,
       nativeCssMappingPercentage,
       complexityWarningCount: warnings.filter((warning) => warning.code === "conversion.complexity").length,
       invalidNestingCount: structureValidation.invalidNestingCount,
+    },
+  };
+}
+
+export function serializeBricksClipboardPayload(exportResult: BricksExport) {
+  return {
+    content: exportResult.content,
+    source: exportResult.source,
+    sourceUrl: exportResult.sourceUrl,
+    version: exportResult.version,
+    globalClasses: exportResult.globalClasses ?? [],
+    globalElements: [],
+  };
+}
+
+export function serializeJigmaDebugReport(exportResult: BricksExport) {
+  return {
+    validation: exportResult.validation,
+    assetManifest: exportResult.jigmaMeta.assetManifest,
+    classAudit: exportResult.jigmaMeta.classAudit ?? [],
+    warnings: exportResult.warnings,
+    complexity: exportResult.jigmaMeta.complexity,
+    mappingMetrics: {
+      nativeStyleMappedCount: exportResult.validation.nativeStyleMappedCount,
+      customCssFallbackCount: exportResult.validation.customCssFallbackCount,
+      literalFallbackRuleCount: exportResult.validation.literalFallbackRuleCount,
+      unresolvedSelectorCount: exportResult.validation.unresolvedSelectorCount,
     },
   };
 }

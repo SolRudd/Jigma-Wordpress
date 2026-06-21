@@ -51,6 +51,8 @@ import { inspectDependencies } from "../../lib/dependencies/inspect.ts";
 import {
   DEFAULT_OUTPUT_ADAPTER,
   createOutputExport,
+  serializeOutputClipboardPayload,
+  serializeOutputDebugReport,
 } from "../../lib/output/adapters.ts";
 import { createPreviewDocument } from "../../lib/preview/document.ts";
 import type {
@@ -66,6 +68,7 @@ import type {
 const defaultOptions: OutputOptions = {
   stylingMode: "bem-css",
   exportMode: "native-bem-classes",
+  exportProfile: "bricks-compatibility",
   classMode: "strict-bem",
   projectPrefix: "jg",
   blockName: "section",
@@ -780,7 +783,18 @@ export default function JigmaBuilder() {
       }),
     [preview.html, preview.css, preview.js, options, excludedLayerIds, deletedLayerIds],
   );
-  const bricksJson = useMemo(() => JSON.stringify(bricksExport, null, 2), [bricksExport]);
+  const bricksClipboardJson = useMemo(
+    () => JSON.stringify(serializeOutputClipboardPayload(bricksExport), null, 2),
+    [bricksExport],
+  );
+  const bricksDebugJson = useMemo(
+    () =>
+      JSON.stringify({
+        clipboard: serializeOutputClipboardPayload(bricksExport),
+        debug: serializeOutputDebugReport(bricksExport),
+      }, null, 2),
+    [bricksExport],
+  );
   const previewInspectorActive = false;
   const previewDocument = useMemo(
     () =>
@@ -1223,7 +1237,7 @@ export default function JigmaBuilder() {
     }
 
     try {
-      await navigator.clipboard.writeText(bricksJson);
+      await navigator.clipboard.writeText(bricksClipboardJson);
       setStatus("Bricks structure copied");
       setMessages([{ kind: "export", message: "Copied selected Bricks structure." }]);
     } catch {
@@ -1237,7 +1251,7 @@ export default function JigmaBuilder() {
       return;
     }
 
-    const blob = new Blob([bricksJson], { type: "application/json" });
+    const blob = new Blob([bricksClipboardJson], { type: "application/json" });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -2029,7 +2043,7 @@ export default function JigmaBuilder() {
               </article>
               <article>
                 <span>Export architecture</span>
-                <strong>Native Bricks Classes</strong>
+                <strong>{options.exportProfile === "bricks-compatibility" ? "Bricks Compatibility" : "Native Controls Experimental"}</strong>
               </article>
               <article>
                 <span>Naming</span>
@@ -2144,7 +2158,7 @@ export default function JigmaBuilder() {
                 {showJson ? "Hide generated JSON" : "View generated JSON"}
               </button>
             </div>
-            {showJson && <pre className="json-output json-output--inline">{bricksJson}</pre>}
+            {showJson && <pre className="json-output json-output--inline">{bricksDebugJson}</pre>}
 
             <details
               className="advanced-export"
@@ -2154,6 +2168,13 @@ export default function JigmaBuilder() {
             >
               <summary>Advanced output</summary>
               <div className="toggle-stack">
+                <Toggle
+                  label="Native Controls Experimental"
+                  checked={options.exportProfile === "native-controls-experimental"}
+                  onChange={(checked) =>
+                    setOption("exportProfile", checked ? "native-controls-experimental" : "bricks-compatibility")}
+                  note="Advanced mode maps supported CSS into Bricks controls. Compatibility keeps full literal CSS on classes."
+                />
                 <Toggle
                   label="Minify fallback CSS"
                   checked={options.minifyElementCss}

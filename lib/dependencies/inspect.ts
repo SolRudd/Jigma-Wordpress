@@ -14,6 +14,16 @@ function makeId(type: string, value: string) {
 }
 
 function pushUnique(items: DependencyItem[], item: Omit<DependencyItem, "id">) {
+  const sameSourceValue = items.find((existing) =>
+    existing.source === item.source && existing.value === item.value
+  );
+  if (sameSourceValue) {
+    sameSourceValue.warning = sameSourceValue.warning ?? item.warning;
+    sameSourceValue.required = sameSourceValue.required || item.required;
+    sameSourceValue.includable = sameSourceValue.includable || item.includable;
+    return;
+  }
+
   const id = makeId(item.type, item.value);
   if (!items.some((existing) => existing.id === id)) {
     items.push({ ...item, id });
@@ -34,6 +44,17 @@ function getHostLabel(value: string) {
     return url.hostname.replace(/^www\./, "");
   } catch {
     return value;
+  }
+}
+
+function cssUrlFamilyKey(value: string) {
+  try {
+    const url = value.startsWith("//") ? new URL(`https:${value}`) : new URL(value, "https://jigma.local");
+    return `${url.origin}${url.pathname
+      .replace(/[-_](?:desktop|tablet|mobile)(?=\.[a-z0-9]+$)/i, "")
+      .replace(/@\d+x(?=\.[a-z0-9]+$)/i, "")}`;
+  } catch {
+    return value.replace(/[-_](?:desktop|tablet|mobile)(?=\.[a-z0-9]+(?:[?#]|$))/i, "");
   }
 }
 
@@ -180,6 +201,8 @@ export function inspectDependencies(html: string, css: string, js: string) {
     });
   }
 
+  const cssUrlValues = new Set<string>();
+  const cssImageUrlGroups = new Map<string, string[]>();
   const urlPattern = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
   let urlMatch: RegExpExecArray | null;
   while ((urlMatch = urlPattern.exec(css)) !== null) {
@@ -188,28 +211,36 @@ export function inspectDependencies(html: string, css: string, js: string) {
       continue;
     }
 
+    cssUrlValues.add(value);
+    if (isSvgUrl(value)) {
+      pushUnique(items, {
+        type: "svg",
+        label: `SVG URL: ${getHostLabel(value)}`,
+        value,
+        source: "css",
+        required: true,
+        includable: false,
+      });
+      continue;
+    }
+
+    const familyKey = cssUrlFamilyKey(value);
+    cssImageUrlGroups.set(familyKey, [...(cssImageUrlGroups.get(familyKey) ?? []), value]);
+  }
+
+  cssImageUrlGroups.forEach((values) => {
+    const uniqueValues = Array.from(new Set(values));
     pushUnique(items, {
-      type: isSvgUrl(value) ? "svg" : "image",
-      label: isSvgUrl(value) ? `SVG URL: ${getHostLabel(value)}` : `CSS asset: ${getHostLabel(value)}`,
-      value,
+      type: "image",
+      label: uniqueValues.length > 1
+        ? `External background image (${uniqueValues.length} responsive variants)`
+        : `CSS asset: ${getHostLabel(uniqueValues[0])}`,
+      value: uniqueValues.join("\n"),
       source: "css",
       required: true,
       includable: false,
     });
-  }
-
-  const variablePattern = /(--[a-zA-Z0-9_-]+)\s*:/g;
-  let variableMatch: RegExpExecArray | null;
-  while ((variableMatch = variablePattern.exec(css)) !== null) {
-    pushUnique(items, {
-      type: "css-variable",
-      label: `CSS variable: ${variableMatch[1]}`,
-      value: variableMatch[1],
-      source: "css",
-      required: false,
-      includable: true,
-    });
-  }
+  });
 
   const fontFacePattern = /@font-face\s*\{([\s\S]*?)\}/gi;
   let fontFaceMatch: RegExpExecArray | null;
@@ -237,6 +268,9 @@ export function inspectDependencies(html: string, css: string, js: string) {
     let match: RegExpExecArray | null;
     while ((match = externalPattern.exec(source.text)) !== null) {
       const value = match[0];
+      if (source.source === "css" && cssUrlValues.has(value)) {
+        continue;
+      }
       const library = detectLibrary(value);
       const isCdn = /cdn|jsdelivr|unpkg|cdnjs|bootstrapcdn|googleapis|gstatic/i.test(value);
       if (library) {

@@ -8,6 +8,8 @@ export type ClassMode = "strict-bem" | "hybrid" | "preserve";
 
 export type ConversionProfile = "clean-native" | "fidelity";
 
+export type ExportProfile = "bricks-compatibility" | "native-controls-experimental";
+
 export type ExportMode =
   | "native-bem-classes"
   | "element-styles"
@@ -18,6 +20,7 @@ export type ExportMode =
 export interface OutputOptions {
   stylingMode: StylingMode;
   exportMode: ExportMode;
+  exportProfile?: ExportProfile;
   classMode: ClassMode;
   conversionProfile?: ConversionProfile;
   projectPrefix: string;
@@ -34,6 +37,10 @@ export interface ParsedElement {
   attributes: Record<string, string>;
   children: ParsedElement[];
   textSegments: string[];
+  contentParts: Array<
+    | { type: "text"; value: string }
+    | { type: "element"; element: ParsedElement }
+  >;
   selfClosing: boolean;
   rawHtml?: string;
 }
@@ -215,6 +222,7 @@ export interface BricksExportValidation {
   overlayMappedCount?: number;
   failedAssetCount?: number;
   conversionProfile?: ConversionProfile;
+  exportProfile?: ExportProfile;
   generatedWrapperCount?: number;
   actionRequiredWarningCount?: number;
   nativeCssMappingPercentage?: number;
@@ -244,6 +252,7 @@ export interface BricksExport {
     label: string;
     targetBricksVersion: string;
     stylingMode: StylingMode | "native-bricks-classes";
+    exportProfile?: ExportProfile;
     conversionProfile?: ConversionProfile;
     complexity?: {
       elementCount: number;

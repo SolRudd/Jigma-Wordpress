@@ -30,6 +30,31 @@ const HIDDEN_STRUCTURE_TAGS = new Set([
   "source",
 ]);
 
+const SAFE_PHRASING_TAGS = new Set([
+  "abbr",
+  "b",
+  "br",
+  "code",
+  "em",
+  "i",
+  "mark",
+  "small",
+  "span",
+  "strong",
+  "sub",
+  "sup",
+]);
+
+const SAFE_INLINE_ATTRIBUTES = new Set([
+  "class",
+  "id",
+  "role",
+  "hidden",
+  "title",
+  "width",
+  "height",
+]);
+
 function decodeBasicEntities(value: string) {
   return value
     .replaceAll("&nbsp;", " ")
@@ -68,6 +93,7 @@ function createElement(tagName: string, rawAttributes: string, selfClosing: bool
     attributes: parseAttributes(rawAttributes),
     children: [],
     textSegments: [],
+    contentParts: [],
     selfClosing,
   };
 }
@@ -105,7 +131,9 @@ export function parseHtmlFragment(html: string) {
     if (tagStart === -1) {
       const text = html.slice(index);
       if (text.trim()) {
-        stack.at(-1)?.textSegments.push(decodeBasicEntities(text));
+        const decoded = decodeBasicEntities(text);
+        stack.at(-1)?.textSegments.push(decoded);
+        stack.at(-1)?.contentParts.push({ type: "text", value: decoded });
       }
       break;
     }
@@ -113,7 +141,9 @@ export function parseHtmlFragment(html: string) {
     if (tagStart > index) {
       const text = html.slice(index, tagStart);
       if (text.trim()) {
-        stack.at(-1)?.textSegments.push(decodeBasicEntities(text));
+        const decoded = decodeBasicEntities(text);
+        stack.at(-1)?.textSegments.push(decoded);
+        stack.at(-1)?.contentParts.push({ type: "text", value: decoded });
       }
     }
 
@@ -167,7 +197,9 @@ export function parseHtmlFragment(html: string) {
     const rawAttributes = tagMatch[2].replace(/\/\s*$/, "");
     const selfClosing = /\/\s*$/.test(rawTag) || VOID_TAGS.has(tagName);
     const element = createElement(tagName, rawAttributes, selfClosing);
-    stack.at(-1)?.children.push(element);
+    const parent = stack.at(-1);
+    parent?.children.push(element);
+    parent?.contentParts.push({ type: "element", element });
 
     if (tagName === "svg") {
       if (selfClosing) {
@@ -193,6 +225,7 @@ export function parseHtmlFragment(html: string) {
         const rawText = html.slice(index, index + closeMatch.index);
         if (rawText.trim()) {
           element.textSegments.push(rawText);
+          element.contentParts.push({ type: "text", value: rawText });
         }
         index += closeMatch.index + closeMatch[0].length;
       }
@@ -245,6 +278,93 @@ export function getClassNames(element: ParsedElement) {
     .filter(Boolean);
 }
 
+function isSafeInlineAttribute(name: string) {
+  return SAFE_INLINE_ATTRIBUTES.has(name) ||
+    name.startsWith("aria-") ||
+    name.startsWith("data-");
+}
+
+function normalizeInlineText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function serializeInlineAttributes(attributes: Record<string, string>) {
+  return Object.entries(stripUnsafeEventAttributes(attributes))
+    .filter(([name]) => isSafeInlineAttribute(name))
+    .map(([name, value]) => value === "" ? name : `${name}="${escapeHtml(value)}"`)
+    .join(" ");
+}
+
+function serializeInlineElement(element: ParsedElement): string {
+  if (element.tagName === "br") {
+    return "<br>\n";
+  }
+
+  if (!SAFE_PHRASING_TAGS.has(element.tagName)) {
+    return escapeHtml(getElementText(element));
+  }
+
+  const attributeText = serializeInlineAttributes(element.attributes);
+  const openTag = attributeText ? `<${element.tagName} ${attributeText}>` : `<${element.tagName}>`;
+  return `${openTag}${serializeInlineContent(element)}</${element.tagName}>`;
+}
+
+export function hasOnlyPhrasingContent(element: ParsedElement): boolean {
+  return element.children.every((child) =>
+    HIDDEN_STRUCTURE_TAGS.has(child.tagName) ||
+    (SAFE_PHRASING_TAGS.has(child.tagName) && hasOnlyPhrasingContent(child))
+  );
+}
+
+export function serializeInlineContent(element: ParsedElement): string {
+  const parts = element.contentParts.length > 0
+    ? element.contentParts
+    : [
+      ...element.textSegments.map((value) => ({ type: "text" as const, value })),
+      ...element.children.map((child) => ({ type: "element" as const, element: child })),
+    ];
+  let output = "";
+  let lastToken: "none" | "text" | "element" | "br" = "none";
+
+  parts.forEach((part) => {
+    if (part.type === "text") {
+      const text = normalizeInlineText(part.value);
+      if (!text) {
+        return;
+      }
+      if (output && lastToken !== "br" && !output.endsWith(" ")) {
+        output += " ";
+      }
+      output += escapeHtml(text);
+      lastToken = "text";
+      return;
+    }
+
+    if (HIDDEN_STRUCTURE_TAGS.has(part.element.tagName)) {
+      return;
+    }
+
+    const html = serializeInlineElement(part.element);
+    if (!html) {
+      return;
+    }
+
+    if (
+      output &&
+      lastToken !== "br" &&
+      part.element.tagName !== "br" &&
+      !output.endsWith(" ")
+    ) {
+      output += " ";
+    }
+
+    output += html;
+    lastToken = part.element.tagName === "br" ? "br" : "element";
+  });
+
+  return output.trim();
+}
+
 export function getOwnText(element: ParsedElement, maxLength = 80) {
   const ownText = element.textSegments
     .map((text) => text.replace(/\s+/g, " ").trim())
@@ -259,6 +379,16 @@ export function getOwnText(element: ParsedElement, maxLength = 80) {
 }
 
 export function getElementText(element: ParsedElement): string {
+  if (element.tagName === "br") {
+    return "\n";
+  }
+
+  if (element.contentParts.length > 0) {
+    return element.contentParts.map((part) =>
+      part.type === "text" ? part.value : getElementText(part.element)
+    ).join(" ");
+  }
+
   return [
     ...element.textSegments,
     ...element.children.map((child) => getElementText(child)),

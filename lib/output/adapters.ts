@@ -1,5 +1,10 @@
 import type { BricksExport, ConversionInput } from "../../types/jigma.ts";
-import { createBricksExport, TARGET_BRICKS_VERSION } from "../bricks/export.ts";
+import {
+  createBricksExport,
+  serializeBricksClipboardPayload,
+  serializeJigmaDebugReport,
+  TARGET_BRICKS_VERSION,
+} from "../bricks/export.ts";
 
 export type OutputTarget = "bricks";
 export type OutputFormat = "bricks-json";
@@ -31,4 +36,26 @@ export function createOutputExport(
   adapter: OutputAdapter = DEFAULT_OUTPUT_ADAPTER,
 ) {
   return adapter.createExport(input);
+}
+
+export function serializeOutputClipboardPayload(
+  exportResult: BricksExport,
+  adapter: OutputAdapter = DEFAULT_OUTPUT_ADAPTER,
+) {
+  if (adapter.target === "bricks") {
+    return serializeBricksClipboardPayload(exportResult);
+  }
+
+  return exportResult;
+}
+
+export function serializeOutputDebugReport(
+  exportResult: BricksExport,
+  adapter: OutputAdapter = DEFAULT_OUTPUT_ADAPTER,
+) {
+  if (adapter.target === "bricks") {
+    return serializeJigmaDebugReport(exportResult);
+  }
+
+  return exportResult;
 }
