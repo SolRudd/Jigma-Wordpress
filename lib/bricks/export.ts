@@ -53,6 +53,16 @@ const HIDDEN_STRUCTURE_TAGS = new Set([
 
 const TEXT_TAGS = new Set(["p", "span", "strong", "em", "small", "b", "i", "mark", "li"]);
 const WRAPPER_TAGS = new Set(["div", "article", "header", "main", "footer", "nav", "aside", "ul", "ol"]);
+const SEMANTIC_WRAPPER_TAGS = new Set(["header", "main", "footer", "nav", "article", "aside", "figure", "ul", "ol"]);
+const NON_NESTABLE_BRICKS_ELEMENTS = new Set([
+  "heading",
+  "text-link",
+  "button",
+  "text-basic",
+  "svg",
+  "image",
+  "rich-text",
+]);
 const SUPPORTED_TAGS = new Set([
   "section",
   "div",
@@ -85,6 +95,9 @@ const SUPPORTED_TAGS = new Set([
   "b",
   "i",
   "mark",
+  "pre",
+  "code",
+  "figure",
 ]);
 
 interface PendingElement {
@@ -161,23 +174,53 @@ function pushGroupedWarning(
   });
 }
 
+function isActionableCssWarning(warning: ConversionWarning) {
+  if (warning.severity !== "info" && warning.severity !== "notice") {
+    return true;
+  }
+
+  return /@font-face|could not|dropped|missing|failed|unresolved|not present|requires manual review/i
+    .test(warning.message);
+}
+
 function escapeAttribute(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+}
+
+function escapeHtmlText(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function isValidClassName(className: string) {
   return /^-?[_a-zA-Z]+[_a-zA-Z0-9-]*$/.test(className);
 }
 
+function hasRenderableChildren(element: ParsedElement) {
+  return element.children.some((child) => !HIDDEN_STRUCTURE_TAGS.has(child.tagName));
+}
+
+function hasOnlyMediaChildren(element: ParsedElement) {
+  const children = element.children.filter((child) => !HIDDEN_STRUCTURE_TAGS.has(child.tagName));
+  return children.length > 0 && children.every((child) => child.tagName === "img" || child.tagName === "picture");
+}
+
 function getBricksMapping(element: ParsedElement) {
   const tag = element.tagName;
   const text = getOwnText(element, 500);
+  const hasChildren = hasRenderableChildren(element);
 
   if (tag === "section") {
     return { name: "section", supported: true };
   }
 
   if (/^h[1-6]$/.test(tag)) {
+    if (hasChildren) {
+      return { name: "div", supported: true, semanticTag: tag, generatedWrapper: true };
+    }
+
     return { name: "heading", supported: true };
   }
 
@@ -194,10 +237,18 @@ function getBricksMapping(element: ParsedElement) {
   }
 
   if (tag === "a") {
+    if (hasChildren && !hasOnlyMediaChildren(element)) {
+      return { name: "div", supported: true, semanticTag: "a", generatedWrapper: true };
+    }
+
     return { name: "text-link", supported: true };
   }
 
   if (tag === "button") {
+    if (hasChildren) {
+      return { name: "div", supported: true, semanticTag: "button", generatedWrapper: true };
+    }
+
     return { name: "button", supported: true };
   }
 
@@ -209,8 +260,16 @@ function getBricksMapping(element: ParsedElement) {
     return { name: "text-basic", supported: true };
   }
 
+  if (tag === "pre" || tag === "code") {
+    return { name: "code", supported: true };
+  }
+
   if (tag === "div" || WRAPPER_TAGS.has(tag)) {
-    return { name: "div", supported: true };
+    return {
+      name: "div",
+      supported: true,
+      semanticTag: SEMANTIC_WRAPPER_TAGS.has(tag) ? tag : undefined,
+    };
   }
 
   return { name: "div", supported: false };
@@ -226,7 +285,7 @@ function getAttributeSettings(element: ParsedElement) {
   return settings;
 }
 
-function getContentSettings(element: ParsedElement, name: string) {
+function getContentSettings(element: ParsedElement, name: string, semanticTag?: string) {
   const settings: Record<string, unknown> = {};
   const tag = element.tagName;
   const text = (name === "heading" || name === "text-link" || name === "button")
@@ -238,8 +297,18 @@ function getContentSettings(element: ParsedElement, name: string) {
     settings.tag = tag;
   }
 
-  if (name === "text-basic" || name === "button" || name === "text-link") {
+  if (name === "text-basic") {
     settings.text = text;
+    settings.tag = tag;
+  }
+
+  if (name === "button" || name === "text-link") {
+    settings.text = text;
+  }
+
+  if (name === "div" && semanticTag) {
+    settings.tag = semanticTag;
+    settings.customTag = semanticTag;
   }
 
   if (name === "button" || name === "text-link") {
@@ -259,6 +328,11 @@ function getContentSettings(element: ParsedElement, name: string) {
   if (name === "code" && tag === "iframe") {
     settings.executeCode = false;
     settings.html = serializeElement(element, { path: "iframe", skipScripts: true });
+  }
+
+  if (name === "code" && (tag === "pre" || tag === "code")) {
+    settings.executeCode = false;
+    settings.html = `<pre>${escapeHtmlText(getElementText(element))}</pre>`;
   }
 
   if (name === "svg") {
@@ -299,6 +373,7 @@ function makeClassList(
   bemClass: string,
   originalClasses: string[],
   warnings: ConversionWarning[],
+  blockName?: string,
 ) {
   const validOriginalClasses = originalClasses.filter((className) => {
     const valid = isValidClassName(className);
@@ -316,6 +391,23 @@ function makeClassList(
     : [bemClass];
 
   if (mode === "strict-bem") {
+    const sourceBemClasses = blockName
+      ? validOriginalClasses.filter((className) =>
+        className === blockName ||
+        className.startsWith(`${blockName}__`) ||
+        className.startsWith(`${blockName}--`)
+      )
+      : [];
+
+    if (sourceBemClasses.length > 0) {
+      return Array.from(new Set(sourceBemClasses.flatMap((className) => {
+        if (className.includes("--")) {
+          return [className.split("--")[0], className];
+        }
+        return [className];
+      })));
+    }
+
     return strictBemClasses;
   }
 
@@ -597,6 +689,51 @@ function createGeneratedTextClass(blockName: string, assignment: BemClassAssignm
   return `${blockName}__${suffix}`;
 }
 
+function shouldSkipGeneratedClass(element: ParsedElement, mappingName: string, originalClasses: string[]) {
+  if (originalClasses.length > 0) {
+    return false;
+  }
+
+  return mappingName === "text-basic";
+}
+
+function getLabelClass(assignment: BemClassAssignment, classList: string[]) {
+  const modifierClass = [...classList]
+    .reverse()
+    .find((className) => className.includes("__") && className.includes("--"));
+  if (modifierClass) {
+    return modifierClass;
+  }
+
+  const sourceElementClass = [...classList].reverse().find((className) => className.includes("__"));
+  return sourceElementClass ?? assignment.className;
+}
+
+function validateBricksStructure(content: BricksElement[]) {
+  const ids = new Set(content.map((element) => element.id));
+  let invalidNestingCount = 0;
+  let parentChildMismatchCount = 0;
+
+  content.forEach((element) => {
+    if (NON_NESTABLE_BRICKS_ELEMENTS.has(element.name) && element.children.length > 0) {
+      invalidNestingCount += 1;
+    }
+
+    element.children.forEach((childId) => {
+      const child = content.find((item) => item.id === childId);
+      if (!child || child.parent !== element.id || !ids.has(childId)) {
+        parentChildMismatchCount += 1;
+      }
+    });
+  });
+
+  return {
+    invalidNestingCount,
+    parentChildMismatchCount,
+    valid: invalidNestingCount === 0 && parentChildMismatchCount === 0,
+  };
+}
+
 function getModifier(className: string) {
   return className.includes("--") ? className.split("--").at(-1) ?? "" : "";
 }
@@ -606,6 +743,10 @@ function getSourceClassesForGeneratedClass(
   generatedClass: string,
   classList: string[],
 ) {
+  if (originalClasses.includes(generatedClass)) {
+    return [generatedClass];
+  }
+
   const sourceClasses = new Set<string>([generatedClass]);
   const modifier = getModifier(generatedClass);
   const modifiers = classList.map(getModifier).filter(Boolean);
@@ -673,6 +814,7 @@ function createClassCssTargets(
 
 export function createBricksExport(input: ConversionInput): BricksExport {
   const warnings: ConversionWarning[] = [];
+  const conversionProfile = input.options.conversionProfile ?? "clean-native";
   const exportMode = input.options.exportMode;
   const shouldCreateNativeBemClasses = isNativeBemClassMode(exportMode);
   const shouldAttachElementCss = exportMode === "element-styles";
@@ -701,6 +843,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   let classAttachmentCount = 0;
   let unsignedSvgCodeCount = 0;
   let unsignedJavaScriptCodeCount = 0;
+  let generatedWrapperCount = 0;
 
   assetManifest.warnings.forEach((warning) => pushGroupedWarning(warnings, warning));
   parsed.warnings.forEach((warning) => pushWarning(warnings, warning));
@@ -744,14 +887,23 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       assignment.className,
       originalClasses,
       warnings,
+      bemFactory.blockName,
+    ).filter((className) =>
+      conversionProfile === "fidelity" ||
+      !shouldSkipGeneratedClass(element, mapping.name, originalClasses) ||
+      originalClasses.includes(className)
     );
     const svgSanitization = mapping.name === "svg"
       ? sanitizeSvgMarkup(element.rawHtml ?? serializeElement(element, { path: "svg", skipScripts: true }))
       : null;
     const settings: Record<string, unknown> = {
       ...getAttributeSettings(element),
-      ...getContentSettings(element, mapping.name),
+      ...getContentSettings(element, mapping.name, mapping.semanticTag),
     };
+
+    if (mapping.generatedWrapper) {
+      generatedWrapperCount += 1;
+    }
 
     if (shouldCreateNativeBemClasses) {
       const preservedClasses = input.options.classMode === "strict-bem"
@@ -772,12 +924,6 @@ export function createBricksExport(input: ConversionInput): BricksExport {
 
     if (!mapping.supported) {
       pushWarning(warnings, `<${element.tagName}> was converted to a Bricks Div fallback.`);
-    } else if (
-      WRAPPER_TAGS.has(element.tagName) &&
-      mapping.name === "div" &&
-      element.tagName !== "div"
-    ) {
-      pushWarning(warnings, `<${element.tagName}> was exported as a Bricks Div.`, "info");
     }
 
     const parentElement = parent === 0 ? undefined : contentById.get(parent);
@@ -788,7 +934,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       children: [],
       settings,
     }, createBricksElementLabel({
-      bemClass: assignment.className,
+      bemClass: getLabelClass(assignment, classList),
       tagName: element.tagName,
       parentLabel: parentElement?.label,
     }));
@@ -832,15 +978,15 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       ];
 
       pushGroupedWarning(warnings, {
-        id: `svg-signature:${id}:html`,
+        id: "svg-signature:inline-svg",
         code: "svg.signature_required",
         severity: report?.malformed ? "error" : "action-required",
-        title: "Signature required after import",
-        summary: `${bricksElement.label ?? "Inline SVG"} was preserved as one inline SVG element. Bricks signature required.`,
-        message: `${bricksElement.label ?? "Inline SVG"} was preserved as one inline SVG element. Bricks signature required.`,
+        title: "Inline SVG signatures required",
+        summary: "Inline SVG elements were preserved as atomic SVG elements. Bricks signatures required.",
+        message: "Inline SVG elements were preserved as atomic SVG elements. Bricks signatures required.",
         ownerElementId: id,
         ownerLabel: bricksElement.label,
-        details: signatureDetails,
+        details: [`${bricksElement.label ?? "Inline SVG"}: ${signatureDetails.join(" ")}`],
         suggestedAction: "After pasting into Bricks, review and sign this SVG through Bricks' code signature workflow.",
       });
 
@@ -862,7 +1008,11 @@ export function createBricksExport(input: ConversionInput): BricksExport {
 
     const directText = getOwnText(element, 500);
     const isTextElement = ["heading", "text-basic", "button", "text-link"].includes(mapping.name);
-    if (!isTextElement && directText) {
+    if (
+      conversionProfile === "fidelity" &&
+      !isTextElement &&
+      directText
+    ) {
       const textId = makeStableId(`${path}:direct-text:${directText}`);
       const textClass = createGeneratedTextClass(bemFactory.blockName, assignment);
       const textElement = applyBricksElementLabel({
@@ -889,7 +1039,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     }
 
     let visibleChildIndex = 0;
-    element.children.forEach((child) => {
+    if (!NON_NESTABLE_BRICKS_ELEMENTS.has(mapping.name)) element.children.forEach((child) => {
       if (element.tagName === "picture") {
         return;
       }
@@ -938,7 +1088,9 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       fallbackStrategy: "none" as const,
       fallbackRuleCountByClassName: new Map<string, number>(),
     };
-  elementCss.warnings.forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
+  elementCss.warnings
+    .filter(isActionableCssWarning)
+    .forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
 
   if (input.css.trim() && shouldAttachElementCss && elementCss.attachedRuleCount === 0) {
     pushWarning(
@@ -988,7 +1140,9 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       fallbackStrategy: "none" as const,
       fallbackRuleCountByClassName: new Map<string, number>(),
     };
-  classCss.warnings.forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
+  classCss.warnings
+    .filter(isActionableCssWarning)
+    .forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
 
   if (input.css.trim() && shouldCreateNativeBemClasses && classCss.attachedRuleCount === 0) {
     pushWarning(
@@ -1120,6 +1274,59 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     pushWarning(warnings, "Generated Bricks hierarchy failed ID validation.", "error");
   }
 
+  const structureValidation = validateBricksStructure(content);
+  if (!structureValidation.valid) {
+    pushGroupedWarning(warnings, {
+      id: "bricks-structure-schema",
+      code: "bricks.invalid_structure",
+      severity: "error",
+      title: "Invalid Bricks structure",
+      message: "Generated Bricks structure contains invalid parent/child relationships or non-nestable children.",
+      details: [
+        `${structureValidation.invalidNestingCount} non-nestable element(s) contain children.`,
+        `${structureValidation.parentChildMismatchCount} parent/child mismatch(es) found.`,
+      ],
+      suggestedAction: "Review the generated hierarchy before paste testing.",
+    });
+  }
+
+  const mappedRuleCount = elementCss.nativeStyleMappedCount + classCss.nativeStyleMappedCount;
+  const fallbackCssCount = elementCss.customCssFallbackCount + classCss.customCssFallbackCount +
+    (shouldCreateScopedCssBlock && scopedCss.css.trim() ? 1 : 0);
+  const cssRuleWorkCount = mappedRuleCount + fallbackCssCount + elementCss.unmappedRuleCount +
+    classCss.unmappedRuleCount;
+  const nativeCssMappingPercentage = cssRuleWorkCount > 0
+    ? Math.round((mappedRuleCount / cssRuleWorkCount) * 100)
+    : 100;
+  const actionRequiredWarningCount = warnings.filter((warning) =>
+    warning.severity === "action-required" || warning.severity === "error"
+  ).length;
+  const cleanNativeThresholdsExceeded = [
+    content.length > 40 ? "element-count" : "",
+    globalClasses.length > 25 ? "class-count" : "",
+    unsignedSvgCodeCount > 4 ? "unsigned-svg-count" : "",
+    classAudit.missingClassReferenceCount > 0 ? "missing-class-reference" : "",
+    classAudit.duplicateClassIdCount > 0 ? "duplicate-class-id" : "",
+    structureValidation.invalidNestingCount > 0 ? "invalid-nesting" : "",
+  ].filter(Boolean);
+
+  if (conversionProfile === "clean-native" && cleanNativeThresholdsExceeded.length > 0) {
+    pushGroupedWarning(warnings, {
+      id: "clean-native-complexity",
+      code: "conversion.complexity",
+      severity: "warning",
+      title: "Section complexity exceeds Clean Native targets",
+      summary: "This section is complex. Clean Native may simplify decorative details. Use Fidelity mode to preserve the full source structure.",
+      message: "This section is complex. Clean Native may simplify decorative details. Use Fidelity mode to preserve the full source structure.",
+      details: cleanNativeThresholdsExceeded,
+      suggestedAction: "Review the hierarchy and switch to Fidelity mode only when visual detail matters more than editability.",
+    });
+  }
+
+  const finalActionRequiredWarningCount = warnings.filter((warning) =>
+    warning.severity === "action-required" || warning.severity === "error"
+  ).length;
+
   return {
     content,
     source: "bricksCopiedElements",
@@ -1129,7 +1336,20 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     jigmaMeta: {
       label: "Jigma strict BEM Bricks structure",
       targetBricksVersion: TARGET_BRICKS_VERSION,
-      stylingMode: "bem-css",
+      stylingMode: shouldCreateNativeBemClasses ? "native-bricks-classes" : input.options.stylingMode,
+      conversionProfile,
+      complexity: {
+        elementCount: content.length,
+        nativeClassCount: globalClasses.length,
+        generatedWrapperCount,
+        unsignedSvgCount: unsignedSvgCodeCount,
+        javascriptCodeCount: unsignedJavaScriptCodeCount,
+        unresolvedSelectorCount: elementCss.unresolvedSelectorCount + classCss.unresolvedSelectorCount,
+        actionRequiredWarningCount: finalActionRequiredWarningCount,
+        nativeCssMappingPercentage,
+        fallbackCssCount,
+        cleanNativeThresholdsExceeded,
+      },
       classAudit: classAudit.entries,
       assetManifest,
       notes: [
@@ -1159,6 +1379,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       deletedLayerCount: deletedLayerIds.size,
       unsupportedElementCount,
       generatedTextElementCount,
+      generatedWrapperCount,
       classAttachmentCount,
       globalClassCount: globalClasses.length,
       bemClassCount: pendingElements.length + generatedTextElementCount,
@@ -1168,8 +1389,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
         classCss.unmappedRuleCount,
       unusedSelectorCount: scopedCss.unusedSelectorCount,
       nativeStyleMappedCount: elementCss.nativeStyleMappedCount + classCss.nativeStyleMappedCount,
-      customCssFallbackCount: elementCss.customCssFallbackCount + classCss.customCssFallbackCount +
-        (shouldCreateScopedCssBlock && scopedCss.css.trim() ? 1 : 0),
+      customCssFallbackCount: fallbackCssCount,
       blockScopedFallbackCount: elementCss.blockScopedFallbackCount + classCss.blockScopedFallbackCount,
       literalFallbackRuleCount: elementCss.literalFallbackRuleCount + classCss.literalFallbackRuleCount,
       classFallbackStrategy: classCss.fallbackStrategy ?? "none",
@@ -1194,6 +1414,11 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       backgroundImageCount: assetManifest.summary.backgroundImages,
       overlayMappedCount: assetManifest.summary.overlaysMapped,
       failedAssetCount: assetManifest.summary.failedAssets,
+      conversionProfile,
+      actionRequiredWarningCount: finalActionRequiredWarningCount,
+      nativeCssMappingPercentage,
+      complexityWarningCount: warnings.filter((warning) => warning.code === "conversion.complexity").length,
+      invalidNestingCount: structureValidation.invalidNestingCount,
     },
   };
 }

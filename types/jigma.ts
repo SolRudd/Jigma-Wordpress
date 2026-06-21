@@ -6,6 +6,8 @@ export type StylingMode = "bem-css" | "native-experimental";
 
 export type ClassMode = "strict-bem" | "hybrid" | "preserve";
 
+export type ConversionProfile = "clean-native" | "fidelity";
+
 export type ExportMode =
   | "native-bem-classes"
   | "element-styles"
@@ -17,6 +19,7 @@ export interface OutputOptions {
   stylingMode: StylingMode;
   exportMode: ExportMode;
   classMode: ClassMode;
+  conversionProfile?: ConversionProfile;
   projectPrefix: string;
   blockName: string;
   createGlobalClasses: boolean;
@@ -211,6 +214,12 @@ export interface BricksExportValidation {
   backgroundImageCount?: number;
   overlayMappedCount?: number;
   failedAssetCount?: number;
+  conversionProfile?: ConversionProfile;
+  generatedWrapperCount?: number;
+  actionRequiredWarningCount?: number;
+  nativeCssMappingPercentage?: number;
+  complexityWarningCount?: number;
+  invalidNestingCount?: number;
 }
 
 export interface BricksClassAuditEntry {
@@ -234,7 +243,20 @@ export interface BricksExport {
   jigmaMeta: {
     label: string;
     targetBricksVersion: string;
-    stylingMode: StylingMode;
+    stylingMode: StylingMode | "native-bricks-classes";
+    conversionProfile?: ConversionProfile;
+    complexity?: {
+      elementCount: number;
+      nativeClassCount: number;
+      generatedWrapperCount: number;
+      unsignedSvgCount: number;
+      javascriptCodeCount: number;
+      unresolvedSelectorCount: number;
+      actionRequiredWarningCount: number;
+      nativeCssMappingPercentage: number;
+      fallbackCssCount: number;
+      cleanNativeThresholdsExceeded: string[];
+    };
     notes: string[];
     classAudit?: BricksClassAuditEntry[];
     assetManifest?: AssetManifest;

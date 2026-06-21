@@ -92,32 +92,37 @@ function findMatchingBrace(css: string, openIndex: number) {
 }
 
 function parseTopLevelBlocks(css: string) {
+  const normalizedCss = stripCssComments(css);
   const blocks: CssBlock[] = [];
   let index = 0;
 
-  while (index < css.length) {
-    const openIndex = css.indexOf("{", index);
+  while (index < normalizedCss.length) {
+    const openIndex = normalizedCss.indexOf("{", index);
     if (openIndex === -1) {
       break;
     }
 
-    const closeIndex = findMatchingBrace(css, openIndex);
+    const closeIndex = findMatchingBrace(normalizedCss, openIndex);
     if (closeIndex === -1) {
       blocks.push({
-        selector: css.slice(index, openIndex).trim(),
-        body: css.slice(openIndex + 1).trim(),
+        selector: normalizedCss.slice(index, openIndex).trim(),
+        body: normalizedCss.slice(openIndex + 1).trim(),
       });
       break;
     }
 
     blocks.push({
-      selector: css.slice(index, openIndex).trim(),
-      body: css.slice(openIndex + 1, closeIndex).trim(),
+      selector: normalizedCss.slice(index, openIndex).trim(),
+      body: normalizedCss.slice(openIndex + 1, closeIndex).trim(),
     });
     index = closeIndex + 1;
   }
 
   return blocks.filter((block) => block.selector && block.body);
+}
+
+function stripCssComments(css: string) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
 function formatDeclarations(body: string) {
@@ -256,9 +261,11 @@ function parseDeclarations(body: string): CssDeclaration[] {
   let quote = "";
   let depth = 0;
 
-  for (let index = 0; index < body.length; index += 1) {
-    const char = body[index];
-    const previous = body[index - 1];
+  const normalizedBody = stripCssComments(body);
+
+  for (let index = 0; index < normalizedBody.length; index += 1) {
+    const char = normalizedBody[index];
+    const previous = normalizedBody[index - 1];
 
     if (quote) {
       current += char;

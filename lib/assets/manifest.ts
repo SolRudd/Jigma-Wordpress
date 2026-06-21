@@ -130,7 +130,7 @@ function warningForItem(item: AssetManifestItem): ConversionWarning | null {
   }
 
   return {
-    id: `asset:${item.id}`,
+    id: item.type === "svg-inline" ? "asset:inline-svg" : `asset:${item.id}`,
     code: `asset.${item.type}`,
     severity: item.status === "failed" || item.status === "unsupported" ? "action-required" : "notice",
     title: "Asset review",
@@ -139,11 +139,12 @@ function warningForItem(item: AssetManifestItem): ConversionWarning | null {
     ownerElementId: item.ownerNodeId,
     ownerLabel: item.ownerClass,
     details: [
+      item.type === "svg-inline" && item.ownerClass ? `Owner: ${item.ownerClass}` : "",
       `Source: ${item.originalUrl || item.type}`,
       `Usage: ${item.usage}`,
       `Status: ${item.status}`,
       ...item.warnings.slice(1),
-    ],
+    ].filter(Boolean),
     suggestedAction: item.importable
       ? "Standalone exports preserve URLs. Import into WordPress Media Library only when explicitly enabled in the plugin."
       : "Review this asset in Bricks after paste.",

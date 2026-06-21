@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-06-21T16:12:23.000Z",
+  "generatedAt": "2026-06-21T16:37:49.000Z",
   "dist": "dist",
   "assets": [
     {
-      "file": "dist/assets/index-CymfD4Xe.js",
-      "bytes": 770427,
-      "gzipBytes": 254085
+      "file": "dist/assets/index-B348Pu2E.js",
+      "bytes": 771033,
+      "gzipBytes": 254971
     },
     {
       "file": "dist/assets/index-Dg2nZtsI.css",
@@ -13,8 +13,8 @@
       "gzipBytes": 6442
     }
   ],
-  "totalBytes": 800182,
-  "totalGzipBytes": 260527,
+  "totalBytes": 800788,
+  "totalGzipBytes": 261413,
   "notes": [
     "Vite reports a chunk-size warning when the main JS asset exceeds 500 kB."
   ]

@@ -320,6 +320,98 @@ describe("Bricks export", () => {
     });
   });
 
+  it("uses valid native structure mappings for headings, text, spans, links, and semantic wrappers", () => {
+    const result = exportFor(
+      `<section class="hero">
+  <header class="hero__header"><nav class="hero__nav"><a class="hero__link" href="#plain">Plain link</a></nav></header>
+  <h1 class="hero__title"><span class="hero__title-line">Convert frontend</span><span class="hero__rotator">sections</span></h1>
+  <p class="hero__text">Simple paragraph</p>
+  <span class="hero__eyebrow">Code to Bricks</span>
+  <a class="hero__icon-link" href="#icon"><span class="hero__icon"></span><span class="hero__icon-label">Icon link</span></a>
+  <button class="hero__button"><span class="hero__button-label">Button label</span></button>
+</section>`,
+      `.hero__title { font-size: 64px; }
+.hero__text { line-height: 1.6; }
+.hero__eyebrow { color: teal; }
+.hero__button { display: inline-flex; }`,
+      "",
+      { projectPrefix: "jg", blockName: "hero" },
+    );
+    const title = getElementByLabel(result, "Hero Title")!;
+    const text = getElementByLabel(result, "Hero Text")!;
+    const eyebrow = getElementByLabel(result, "Hero Eyebrow")!;
+    const nav = getElementByLabel(result, "Hero Nav")!;
+    const iconLink = getElementByLabel(result, "Hero Icon Link")!;
+    const button = getElementByLabel(result, "Hero Button")!;
+
+    expect(title.name).toBe("div");
+    expect(title.settings.tag).toBe("h1");
+    expect(title.settings.text).toBeUndefined();
+    expect(title.children.length).toBeGreaterThan(0);
+    expect(text.name).toBe("text-basic");
+    expect(text.settings.tag).toBe("p");
+    expect(eyebrow.name).toBe("text-basic");
+    expect(eyebrow.settings.tag).toBe("span");
+    expect(nav.name).toBe("div");
+    expect(nav.settings.tag).toBe("nav");
+    expect(iconLink.name).toBe("div");
+    expect(iconLink.settings.tag).toBe("a");
+    expect(button.name).toBe("div");
+    expect(button.settings.tag).toBe("button");
+    expect(result.validation.invalidNestingCount).toBe(0);
+    expect(result.content.filter((element) =>
+      ["heading", "text-link", "button", "text-basic", "svg", "image"].includes(element.name) &&
+      element.children.length > 0
+    )).toHaveLength(0);
+  });
+
+  it("preserves distinct source BEM base and variant classes without selector collapse", () => {
+    const result = exportFor(
+      `<section class="jigma-hero">
+  <article class="jigma-hero__card jigma-hero__input-card">Input</article>
+  <article class="jigma-hero__card jigma-hero__output-card">Output</article>
+  <article class="jigma-hero__card jigma-hero__inspector-card">Inspector</article>
+</section>`,
+      `.jigma-hero__card { border-radius: 20px; }
+.jigma-hero__input-card { top: 4px; left: 0; }
+.jigma-hero__output-card { top: 92px; right: -8px; }
+.jigma-hero__inspector-card { bottom: 0; left: 4px; }`,
+      "",
+      { projectPrefix: "jigma", blockName: "hero" },
+    );
+    const inputCard = getElementByLabel(result, "Hero Input Card")!;
+    const outputCard = getElementByLabel(result, "Hero Output Card")!;
+    const inspectorCard = getElementByLabel(result, "Hero Inspector Card")!;
+
+    expect(getElementGlobalClassNames(result, inputCard)).toEqual([
+      "jigma-hero__card",
+      "jigma-hero__input-card",
+    ]);
+    expect(getElementGlobalClassNames(result, outputCard)).toEqual([
+      "jigma-hero__card",
+      "jigma-hero__output-card",
+    ]);
+    expect(getElementGlobalClassNames(result, inspectorCard)).toEqual([
+      "jigma-hero__card",
+      "jigma-hero__inspector-card",
+    ]);
+    expect(getGlobalClassSettings(result, "jigma-hero__card")._border).toEqual({
+      radius: { top: "20px", right: "20px", bottom: "20px", left: "20px" },
+    });
+    expect(getGlobalClassSettings(result, "jigma-hero__input-card")._inset).toEqual({
+      top: "4px",
+      left: "0",
+    });
+    expect(getGlobalClassSettings(result, "jigma-hero__output-card")._inset).toEqual({
+      top: "92px",
+      right: "-8px",
+    });
+    expect(getGlobalClassSettings(result, "jigma-hero__inspector-card")._inset).toEqual({
+      bottom: "0",
+      left: "4px",
+    });
+  });
+
   it("uses Bricks JSON as the default output adapter", () => {
     const result = createOutputExport({
       html: `<section class="hero-section"><h1 class="hero-title">Adapter output</h1></section>`,
@@ -418,10 +510,10 @@ describe("Bricks export", () => {
     expect(header?.javascript).not.toContain("onclick");
     expect(header?.prefix).toBe("jigma");
     expect(header?.blockName).toBe("header");
-    expect(hero?.html).toContain("jigma-hero__rotator");
-    expect(hero?.html).toContain("jigma-hero__card");
-    expect(hero?.css).toContain("@keyframes jh-rotate");
-    expect(hero?.css).toContain("prefers-reduced-motion");
+    expect(hero?.html).toContain("jigma-hero__mockup-svg");
+    expect(hero?.html).not.toContain("jigma-hero__rotator");
+    expect(hero?.html).not.toContain("jigma-hero__card");
+    expect(hero?.css).not.toContain("@keyframes jh-rotate");
     expect(hero?.prefix).toBe("jigma");
     expect(hero?.blockName).toBe("hero");
     expect(proofBar?.html).toContain("jigma-proof__value");
@@ -1893,10 +1985,8 @@ describe("Bricks export", () => {
     expect(result.validation.blockScopedFallbackCount).toBe(1);
     expect(result.validation.customCssFallbackCount).toBe(1);
     expect(result.validation.pseudoRuleCount).toBe(0);
-    expect(result.warnings.some((warning) =>
-      warning.message.includes("was scoped to the") &&
-      warning.message.includes("jg-card")
-    )).toBe(true);
+    expect(result.warnings.some((warning) => warning.message.includes("was scoped to the")))
+      .toBe(false);
   });
 
   it("preserves pseudo fallbacks, container queries, keyframes, and font-face dependencies", () => {
