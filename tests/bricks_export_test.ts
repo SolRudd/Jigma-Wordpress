@@ -2527,13 +2527,18 @@ describe("Bricks export", () => {
     expect(getGlobalClassCss(result, "jg-hero__button--secondary")).not.toContain("padding: 14px 20px;");
   });
 
-  it("wires the WordPress insertion adapter to merge Bricks global classes", () => {
+  it("wires the WordPress insertion adapter to the Bricks Compatibility payload schema", () => {
     const readTextFileSync = (globalThis as unknown as {
       Deno: { readTextFileSync: (path: string) => string };
     }).Deno.readTextFileSync;
     const php = readTextFileSync("jigma-bricks/jigma-bricks.php");
     const panelJs = readTextFileSync("jigma-bricks/assets/jigma-bricks.js");
 
+    expect(php).toContain("JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION");
+    expect(php).toContain("jigma_bricks_validate_compatibility_payload");
+    expect(php).toContain("'bricksCopiedElements' !== (string) $payload['source']");
+    expect(php).toContain("'globalClasses'");
+    expect(php).toContain("'globalElements'");
     expect(php).toContain("bricks_global_classes");
     expect(php).toContain("jigma_bricks_merge_global_classes");
     expect(php).toContain("update_option( jigma_bricks_get_global_classes_option_name()");
@@ -2541,7 +2546,10 @@ describe("Bricks export", () => {
     expect(php).toContain("jigma_bricks_validate_global_class_references");
     expect(php).toContain("jigma_bricks_request_css_regeneration");
     expect(php).toContain("bricks/generate_css_file");
-    expect(php).toContain("Existing Bricks class");
+    expect(php).toContain("jigma_global_class_conflict");
+    expect(php).toContain("No content was inserted");
+    expect(php).toContain("A Bricks global class named");
+    expect(php).toContain("409");
     expect(php).toContain("$settings['css']     = $css_code;");
     expect(php).toContain("$settings['cssCode'] = $css_code;");
     expect(php).toContain("$settings['javascriptCode'] = $js_code;");
@@ -2549,17 +2557,115 @@ describe("Bricks export", () => {
     expect(php).toContain("JavaScript signature required");
     expect(php).toContain("bricks/security_check_before_save/new_elements");
     expect(php).not.toContain("|| '_cssGlobalClasses' === $key");
+    expect(panelJs).toContain("compatibilitySchemaVersion");
     expect(panelJs).toContain("globalClasses: globalClasses");
+    expect(panelJs).toContain("globalElements: []");
+    expect(panelJs).toContain('source: "bricksCopiedElements"');
+    expect(panelJs).toContain("sourceUrl: sourceUrl");
     expect(panelJs).toContain("settings._cssGlobalClasses");
     expect(panelJs).toContain("javascriptCode: state.js");
     expect(panelJs).toContain("executeCode: false");
     expect(panelJs).toContain("Jigma Section JavaScript");
     expect(panelJs).toContain("Include JavaScript in Bricks");
     expect(panelJs).not.toContain("Jigma Component Styles");
-    expect(panelJs).toContain("literal BEM Custom CSS on the owning class");
+    expect(panelJs).not.toContain("jigmaMeta:");
     expect(panelJs).toContain("nativeStyleMappedCount");
     expect(panelJs).not.toContain("_exists");
     expect(panelJs).not.toContain("_jigmaPluginPoc");
+  });
+
+  it("produces the Feature CTA payload the plugin adapter must insert without class loss", () => {
+    const result = exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions);
+    const payload = serializeBricksClipboardPayload(result);
+    const knownClassIds = new Set(payload.globalClasses.map((entry) => entry.id));
+    const heading = payload.content.find((element) => element.name === "heading");
+    const textLink = payload.content.find((element) => element.name === "text-link");
+    const innerCss = `${payload.globalClasses.find((entry) =>
+      entry.name === "lit-feature-cta__inner"
+    )?.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`;
+
+    expect(payload.content).toHaveLength(6);
+    expect(payload.globalClasses).toHaveLength(6);
+    expect(payload.globalElements).toEqual([]);
+    expect(payload.source).toBe("bricksCopiedElements");
+    expect(payload.version).toBe(TARGET_BRICKS_VERSION);
+    expect(JSON.stringify(payload.content)).not.toContain("_cssClasses");
+    expect(payload.content.every((element) => Array.isArray(element.settings._cssGlobalClasses)))
+      .toBe(true);
+    expect(payload.content.flatMap((element) =>
+      Array.isArray(element.settings._cssGlobalClasses)
+        ? element.settings._cssGlobalClasses.map((id) => `${id}`)
+        : []
+    ).every((id) => knownClassIds.has(id))).toBe(true);
+    expect(heading?.settings._cssId).toBe("lit-feature-cta-title");
+    expect(payload.content[0].settings._attributes).toEqual([
+      { name: "aria-labelledby", value: "lit-feature-cta-title" },
+    ]);
+    expect(textLink?.settings.link).toEqual({ type: "internal", url: "#" });
+    expect(textLink?.settings.text).toContain("<span");
+    expect(textLink?.settings.text).toContain("→");
+    expect(innerCss).toContain(".lit-feature-cta__inner::before");
+    expect(innerCss).toContain(".lit-feature-cta__inner::after");
+    expect(innerCss).toContain("forest-desktop.webp");
+    expect(innerCss).toContain("@media (max-width: 820px)");
+  });
+
+  it("produces the Process Light payload the plugin adapter must preserve after save and reload", () => {
+    const result = exportFor(processLightHtml, processLightCss, "", compatibilityOptions);
+    const payload = serializeBricksClipboardPayload(result);
+    const knownClassIds = new Set(payload.globalClasses.map((entry) => entry.id));
+    const header = payload.content.find((element) => element.label === "Process Header");
+    const articles = payload.content.filter((element) => element.settings.tag === "article");
+    const svgElements = payload.content.filter((element) => element.name === "svg");
+    const grid = payload.content.find((element) => element.label === "Process Grid");
+    const cardClass = payload.globalClasses.find((entry) => entry.name === "lit-process-light__card");
+    const iconSvgClass = payload.globalClasses.find((entry) => entry.name === "lit-process-light__icon-svg");
+
+    expect(payload.content).toHaveLength(31);
+    expect(payload.globalClasses).toHaveLength(17);
+    expect(header?.settings.tag).toBe("header");
+    expect(articles).toHaveLength(4);
+    expect(grid?.children).toHaveLength(4);
+    expect(svgElements).toHaveLength(4);
+    expect(svgElements.every((element) => `${element.settings.code ?? ""}`.includes("<svg")))
+      .toBe(true);
+    expect(payload.content.flatMap((element) =>
+      Array.isArray(element.settings._cssGlobalClasses)
+        ? element.settings._cssGlobalClasses.map((id) => `${id}`)
+        : []
+    ).every((id) => knownClassIds.has(id))).toBe(true);
+    expect(payload.content.filter((element) =>
+      Array.isArray(element.settings._cssGlobalClasses) &&
+      element.settings._cssGlobalClasses.includes(cardClass?.id)
+    )).toHaveLength(4);
+    expect(svgElements.filter((element) =>
+      Array.isArray(element.settings._cssGlobalClasses) &&
+      element.settings._cssGlobalClasses.includes(iconSvgClass?.id)
+    )).toHaveLength(4);
+    expect(`${cardClass?.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`)
+      .toContain(".lit-process-light__card::before");
+  });
+
+  it("keeps plugin-compatible JavaScript optional as one disabled unsigned Code element", () => {
+    const html = `<section class="plugin-js"><h2 class="plugin-js__title">Plugin JS</h2></section>`;
+    const js = `document.querySelector('.plugin-js')?.classList.add('is-ready');`;
+    const disabled = serializeBricksClipboardPayload(exportFor(html, "", js, {
+      ...compatibilityOptions,
+      includeJavaScriptCode: false,
+    }));
+    const enabled = serializeBricksClipboardPayload(exportFor(html, "", js, {
+      ...compatibilityOptions,
+      includeJavaScriptCode: true,
+    }));
+
+    expect(disabled.content.filter((element) => element.name === "code")).toHaveLength(0);
+    const codeElements = enabled.content.filter((element) => element.name === "code");
+    expect(codeElements).toHaveLength(1);
+    expect(codeElements[0].settings.executeCode).toBe(false);
+    expect(codeElements[0].settings.javascriptCode).toBe(js);
+    expect(codeElements[0].settings.javascript).toBeUndefined();
+    expect(codeElements[0].settings._cssGlobalClasses).toBeUndefined();
+    expect(enabled.content[enabled.content.length - 1].id).toBe(codeElements[0].id);
   });
 
   it("scopes CSS to generated BEM classes", () => {

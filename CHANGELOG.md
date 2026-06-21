@@ -1,5 +1,14 @@
 # Changelog
 
+## Jigma Bricks plugin compatibility adapter - 2026-06-22
+
+- Bumped the WordPress plugin POC to `0.1.1`.
+- Aligned plugin insertion with the shared Bricks Compatibility payload shape used by standalone Copy Bricks Structure.
+- Preserved native Bricks class records and `_cssGlobalClasses` references instead of converting them to raw element classes.
+- Added hard conflicts for existing same-name Bricks global classes with different settings.
+- Validated class references before saving page content and kept global class writes ahead of element writes.
+- Documented builder reload, root-only insertion, unsigned code review, and remaining live Bricks QA requirements.
+
 ## Media SVG Overlay Code Fidelity - 2026-06-21
 
 - Added a central asset manifest for standalone exports covering images, responsive sources, CSS URL assets, inline SVG, scripts, video, iframe embeds, and inline event handler review.

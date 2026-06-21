@@ -11,12 +11,23 @@ Proof-of-concept WordPress plugin for running Jigma inside a Bricks Builder edit
 - Inserts generated elements into the current Bricks page as a proof of concept.
 - Creates generated BEM classes as native Bricks global class records.
 - Assigns generated class IDs to elements through `_cssGlobalClasses`.
-- Attaches matching simple CSS rules as class custom CSS using `%root%`.
-- Keeps JavaScript out of the inserted structure by default; it can be added only as a disabled Code element for review.
+- Preserves class-owned custom CSS from the shared Bricks Compatibility payload.
+- Adds JavaScript only when enabled, as one disabled Code element for review.
 
 ## Native insertion proof of concept
 
-The panel posts generated Bricks elements and generated BEM class records to a WordPress AJAX endpoint. The PHP adapter normalizes IDs, strips Jigma-only metadata, merges generated class records into Bricks' `bricks_global_classes` option, reuses exact class-name matches, reports style conflicts, applies Bricks' save-security filter when available, and appends the elements to the documented Bricks content meta key.
+The panel posts the same six-key Bricks Compatibility payload used by the standalone Copy Bricks Structure action:
+
+- `content`
+- `source`
+- `sourceUrl`
+- `version`
+- `globalClasses`
+- `globalElements`
+
+The PHP adapter validates that schema, saves global class records before page elements, remaps class and element IDs, validates every `_cssGlobalClasses` reference, applies Bricks' save-security filter when available, and appends the elements at the page root.
+
+Existing Bricks classes are reused only when the same class name has identical settings. A same-name class with different settings returns a conflict and no content is inserted.
 
 This POC does not mutate Bricks' live canvas JavaScript state. After insertion, reload the Bricks builder to verify the saved page content.
 
@@ -25,4 +36,14 @@ This POC does not mutate Bricks' live canvas JavaScript state. After insertion, 
 - Native Bricks panel registration.
 - Live insertion into the current Bricks canvas without reload.
 - Two-way sync with existing Bricks elements.
+- Selected-element insertion.
+- Non-empty Bricks `globalElements` persistence.
+- Live WordPress/Bricks QA automation.
 - Licensing, accounts, AI, or cloud services.
+
+## Known limitations
+
+- Builder reload is required after insertion.
+- If Bricks changes its content meta key or global class option name, update the isolated adapter helpers in `jigma-bricks.php`.
+- Inline SVG and JavaScript Code elements may require manual signing/review inside Bricks.
+- The floating panel still includes a lightweight proof-of-concept browser exporter; production conversion should continue to be verified against the standalone shared exporter fixtures.

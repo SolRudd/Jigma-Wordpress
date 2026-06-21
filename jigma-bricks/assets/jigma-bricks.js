@@ -8,6 +8,8 @@
 
   var config = window.JigmaBricksPlugin || {};
   var targetVersion = config.targetBricksVersion || "2.3.7";
+  var compatibilitySchemaVersion = config.compatibilitySchemaVersion || "bricks-compatibility.v1";
+  var sourceUrl = config.sourceUrl || "jigma.local";
   var hiddenTags = new Set(["script", "style", "link", "meta", "title", "base", "template"]);
   var wrapperTags = new Set(["div", "article", "header", "main", "footer", "nav", "aside", "ul", "ol"]);
   var textTags = new Set(["p", "span", "strong", "em", "small", "b", "i", "mark", "li"]);
@@ -69,6 +71,7 @@
       form.append("postId", String(details.postId));
       form.append("payload", JSON.stringify(payload));
       form.append("includeJsCode", options && options.includeJsCode ? "1" : "");
+      form.append("schemaVersion", compatibilitySchemaVersion);
 
       return fetch(config.ajaxUrl, {
         body: form,
@@ -1188,29 +1191,10 @@
 
     var classAudit = auditClasses(built.content, globalClasses);
 
-    var payload = {
-      content: built.content,
-      globalClasses: globalClasses,
-      source: "bricksCopiedElements",
-      sourceUrl: "jigma.bricks-plugin",
-      version: targetVersion,
-      jigmaMeta: {
-        label: "Jigma Bricks plugin POC",
-        targetBricksVersion: targetVersion,
-        stylingMode: "bem-css",
-        classAudit: classAudit.entries,
-        notes: [
-          "Generated inside the Bricks builder environment.",
-          "BEM classes are created as native editable Bricks classes.",
-          "Matching CSS declarations use native Bricks class settings with literal BEM Custom CSS on the owning class for unsupported rules.",
-          state.includeJsCode
-            ? "JavaScript is included as a disabled Code element for manual Bricks review."
-            : "JavaScript and external dependencies require manual Bricks review.",
-        ],
-      },
-      warnings: warnings,
+    var debugReport = {
       validation: {
         targetBricksVersion: targetVersion,
+        compatibilitySchemaVersion: compatibilitySchemaVersion,
         rootCount: built.content.filter(function (element) { return element.parent === 0; }).length,
         totalElements: built.content.length,
         hierarchyValid: true,
@@ -1238,12 +1222,24 @@
         dependencyWarningCount: dependencies.length,
         jsWarningCount: state.js.trim() ? 1 : 0,
       },
+      classAudit: classAudit.entries,
+      warnings: warnings,
+    };
+
+    var payload = {
+      content: built.content,
+      globalClasses: globalClasses,
+      globalElements: [],
+      source: "bricksCopiedElements",
+      sourceUrl: sourceUrl,
+      version: targetVersion,
     };
 
     return {
       payload: payload,
       dependencies: dependencies,
       warnings: warnings,
+      debug: debugReport,
     };
   }
 
@@ -1366,7 +1362,7 @@
       var adapterDetails = JigmaBricksInsertAdapter.inspect();
       renderList(dependenciesList, result.dependencies, "No external dependencies detected.");
       renderList(warningsList, result.warnings, "No warnings yet.");
-      status.textContent = "Preview ready. Elements: " + result.payload.validation.totalElements + ". CSS rules attached: " + result.payload.validation.cssAttachedRuleCount + "." + (adapterDetails.postId ? " Target post: " + adapterDetails.postId + "." : " Target post not detected.");
+      status.textContent = "Preview ready. Elements: " + result.debug.validation.totalElements + ". CSS rules attached: " + result.debug.validation.cssAttachedRuleCount + "." + (adapterDetails.postId ? " Target post: " + adapterDetails.postId + "." : " Target post not detected.");
     }
 
     run.addEventListener("click", updatePreview);
@@ -1382,7 +1378,7 @@
         includeJsCode: state.includeJsCode,
       }).then(function (data) {
         var codeWarning = data.codeWarnings && data.codeWarnings.length ? " " + data.codeWarnings[0] : "";
-        status.textContent = (data.message || "Jigma elements inserted.") + " Inserted: " + (data.insertedCount || result.payload.validation.totalElements) + "." + codeWarning + " Reload the Bricks builder to view them on the canvas.";
+        status.textContent = (data.message || "Jigma elements inserted.") + " Inserted: " + (data.insertedCount || result.debug.validation.totalElements) + "." + codeWarning + " Reload the Bricks builder to view them on the canvas.";
       }).catch(function (error) {
         status.textContent = error.message || "Jigma insert failed.";
       }).finally(function () {

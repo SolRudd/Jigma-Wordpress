@@ -3,7 +3,7 @@
  * Plugin Name: Jigma Bricks
  * Plugin URI: https://jigma.local
  * Description: Proof-of-concept Jigma panel for copying Bricks Builder structures from pasted HTML, CSS, and optional JavaScript.
- * Version: 0.1.0
+ * Version: 0.1.1
  * Author: Jigma
  * Text Domain: jigma-bricks
  * Requires at least: 6.4
@@ -14,8 +14,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JIGMA_BRICKS_VERSION', '0.1.0' );
+define( 'JIGMA_BRICKS_VERSION', '0.1.1' );
 define( 'JIGMA_BRICKS_TARGET_VERSION', '2.3.7' );
+define( 'JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION', 'bricks-compatibility.v1' );
 define( 'JIGMA_BRICKS_PLUGIN_FILE', __FILE__ );
 define( 'JIGMA_BRICKS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'JIGMA_BRICKS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
@@ -135,6 +136,8 @@ function jigma_bricks_enqueue_assets(): void {
 			'insertNonce'          => wp_create_nonce( 'jigma_bricks_insert' ),
 			'postId'               => jigma_bricks_get_builder_post_id(),
 			'targetBricksVersion'  => JIGMA_BRICKS_TARGET_VERSION,
+			'compatibilitySchemaVersion' => JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION,
+			'sourceUrl'            => 'jigma.local',
 			'version'              => JIGMA_BRICKS_VERSION,
 			'insertLabel'          => __( 'Insert Into Page', 'jigma-bricks' ),
 			'copyLabel'            => __( 'Copy Bricks Structure', 'jigma-bricks' ),
@@ -262,6 +265,67 @@ function jigma_bricks_settings_differ( array $left, array $right ): bool {
 		wp_json_encode( jigma_bricks_sort_recursive( $right ) );
 }
 
+function jigma_bricks_validate_compatibility_payload( $payload ) {
+	if ( ! is_array( $payload ) ) {
+		return new WP_Error(
+			'jigma_invalid_payload',
+			__( 'Jigma did not receive a valid Bricks compatibility payload.', 'jigma-bricks' )
+		);
+	}
+
+	$expected_keys = array(
+		'content',
+		'globalClasses',
+		'globalElements',
+		'source',
+		'sourceUrl',
+		'version',
+	);
+
+	foreach ( $expected_keys as $key ) {
+		if ( ! array_key_exists( $key, $payload ) ) {
+			return new WP_Error(
+				'jigma_missing_payload_key',
+				sprintf(
+					/* translators: %s: payload key. */
+					__( 'Jigma compatibility payload is missing "%s".', 'jigma-bricks' ),
+					$key
+				)
+			);
+		}
+	}
+
+	if ( 'bricksCopiedElements' !== (string) $payload['source'] ) {
+		return new WP_Error(
+			'jigma_invalid_payload_source',
+			__( 'Jigma payload source must be bricksCopiedElements.', 'jigma-bricks' )
+		);
+	}
+
+	if ( ! is_array( $payload['content'] ) || empty( $payload['content'] ) ) {
+		return new WP_Error(
+			'jigma_invalid_payload_content',
+			__( 'Jigma compatibility payload does not contain insertable Bricks content.', 'jigma-bricks' )
+		);
+	}
+
+	if ( ! is_array( $payload['globalClasses'] ) || ! is_array( $payload['globalElements'] ) ) {
+		return new WP_Error(
+			'jigma_invalid_payload_classes',
+			__( 'Jigma compatibility payload must include globalClasses and globalElements arrays.', 'jigma-bricks' )
+		);
+	}
+
+	return array(
+		'content'        => array_values( $payload['content'] ),
+		'globalClasses'  => array_values( $payload['globalClasses'] ),
+		'globalElements' => array_values( $payload['globalElements'] ),
+		'source'         => jigma_bricks_clean_string( $payload['source'] ),
+		'sourceUrl'      => jigma_bricks_clean_string( $payload['sourceUrl'] ),
+		'version'        => jigma_bricks_clean_string( $payload['version'] ),
+	);
+}
+
 function jigma_bricks_normalize_global_class( array $class, array $used_ids ): array {
 	$id       = isset( $class['id'] ) ? sanitize_key( $class['id'] ) : '';
 	$name     = isset( $class['name'] ) ? jigma_bricks_clean_string( $class['name'] ) : '';
@@ -285,6 +349,7 @@ function jigma_bricks_merge_global_classes( array $incoming_classes, array $exis
 	$used_ids         = array();
 	$existing_by_name = array();
 	$id_map           = array();
+	$conflicts        = array();
 
 	foreach ( $merged as $index => $class ) {
 		if ( ! is_array( $class ) ) {
@@ -324,10 +389,16 @@ function jigma_bricks_merge_global_classes( array $incoming_classes, array $exis
 				? $existing['settings']
 				: array();
 			if ( jigma_bricks_settings_differ( $existing_settings, $normalized['settings'] ) ) {
-				$warnings[] = sprintf(
-					/* translators: %s: Bricks global class name. */
-					__( 'Existing Bricks class "%s" was reused, but its saved CSS differs from the generated Jigma CSS.', 'jigma-bricks' ),
-					$name
+				$conflicts[] = array(
+					'type'     => 'global-class-name',
+					'name'     => $name,
+					'existing' => isset( $existing['id'] ) ? (string) $existing['id'] : '',
+					'incoming' => $incoming_id,
+					'message'  => sprintf(
+						/* translators: %s: Bricks global class name. */
+						__( 'A Bricks global class named "%s" already exists with different settings. Rename or remove the existing class before inserting this Jigma payload.', 'jigma-bricks' ),
+						$name
+					),
 				);
 			}
 			continue;
@@ -343,8 +414,9 @@ function jigma_bricks_merge_global_classes( array $incoming_classes, array $exis
 	}
 
 	return array(
-		'classes' => $merged,
-		'idMap'   => $id_map,
+		'classes'   => $merged,
+		'idMap'     => $id_map,
+		'conflicts' => $conflicts,
 	);
 }
 
@@ -585,9 +657,13 @@ function jigma_bricks_insert_generated_elements(): void {
 	$payload_json = isset( $_POST['payload'] ) ? wp_unslash( $_POST['payload'] ) : '';
 	$payload      = json_decode( (string) $payload_json, true );
 
-	if ( ! is_array( $payload ) || empty( $payload['content'] ) || ! is_array( $payload['content'] ) ) {
+	$payload = jigma_bricks_validate_compatibility_payload( $payload );
+	if ( is_wp_error( $payload ) ) {
 		wp_send_json_error(
-			array( 'message' => __( 'Jigma did not receive a valid Bricks structure.', 'jigma-bricks' ) ),
+			array(
+				'message' => $payload->get_error_message(),
+				'code'    => $payload->get_error_code(),
+			),
 			400
 		);
 	}
@@ -616,12 +692,22 @@ function jigma_bricks_insert_generated_elements(): void {
 	$current_classes  = jigma_bricks_get_current_global_classes();
 	$class_warnings   = array();
 	$class_merge      = jigma_bricks_merge_global_classes(
-		isset( $payload['globalClasses'] ) && is_array( $payload['globalClasses'] )
-			? $payload['globalClasses']
-			: array(),
+		$payload['globalClasses'],
 		$current_classes,
 		$class_warnings
 	);
+
+	if ( ! empty( $class_merge['conflicts'] ) ) {
+		wp_send_json_error(
+			array(
+				'message'   => __( 'Jigma found Bricks class-name conflicts. No content was inserted.', 'jigma-bricks' ),
+				'code'      => 'jigma_global_class_conflict',
+				'conflicts' => $class_merge['conflicts'],
+			),
+			409
+		);
+	}
+
 	$incoming_content = array_slice( $payload['content'], 0, 250 );
 	$new_elements     = jigma_bricks_normalize_elements_for_insert(
 		$incoming_content,
@@ -633,6 +719,17 @@ function jigma_bricks_insert_generated_elements(): void {
 		$class_warnings,
 		jigma_bricks_validate_global_class_references( $new_elements, $class_merge['classes'] )
 	);
+
+	if ( ! empty( $class_warnings ) ) {
+		wp_send_json_error(
+			array(
+				'message' => __( 'Jigma found invalid Bricks class references. No content was inserted.', 'jigma-bricks' ),
+				'code'    => 'jigma_invalid_class_references',
+				'errors'  => $class_warnings,
+			),
+			400
+		);
+	}
 
 	if ( empty( $new_elements ) ) {
 		wp_send_json_error(
@@ -661,6 +758,18 @@ function jigma_bricks_insert_generated_elements(): void {
 		);
 	}
 
+	$post_filter_class_errors = jigma_bricks_validate_global_class_references( $new_elements, $class_merge['classes'] );
+	if ( ! empty( $post_filter_class_errors ) ) {
+		wp_send_json_error(
+			array(
+				'message' => __( 'Bricks security filtering left invalid class references. No content was inserted.', 'jigma-bricks' ),
+				'code'    => 'jigma_filtered_invalid_class_references',
+				'errors'  => $post_filter_class_errors,
+			),
+			400
+		);
+	}
+
 	if ( ! empty( $class_merge['classes'] ) ) {
 		update_option( jigma_bricks_get_global_classes_option_name(), $class_merge['classes'], false );
 	}
@@ -676,6 +785,8 @@ function jigma_bricks_insert_generated_elements(): void {
 			'message'       => __( 'Jigma elements inserted. Reload the Bricks builder to show the updated canvas.', 'jigma-bricks' ),
 			'insertedCount' => count( $new_elements ),
 			'globalClasses' => count( $class_merge['classes'] ),
+			'globalElements' => count( $payload['globalElements'] ),
+			'compatibilitySchemaVersion' => JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION,
 			'classWarnings' => $class_warnings,
 			'codeWarnings'  => $code_warnings,
 			'totalCount'    => count( $updated_content ),

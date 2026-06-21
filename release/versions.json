@@ -1,16 +1,20 @@
 {
-  "generatedAt": "2026-06-21T01:00:32.066Z",
+  "generatedAt": "2026-06-21T23:10:04Z",
   "standalone": {
     "name": "jigma",
     "version": "0.1.0"
   },
   "plugin": {
     "slug": "jigma-bricks",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "targetBricksVersion": "2.3.7"
   },
   "checks": {
+    "typecheck": "passed: deno run --node-modules-dir=auto --allow-all npm:typescript@5.6.3/tsc --noEmit",
+    "tests": "passed: deno run --node-modules-dir=auto --allow-all npm:vitest@2.1.9 run",
+    "build": "passed: deno run --node-modules-dir=auto --allow-all npm:vite@5.4.21 build",
     "jsSyntax": "passed: deno check jigma-bricks/assets/jigma-bricks.js",
-    "phpLint": "not run: php and docker unavailable in local environment"
+    "phpLint": "not run: php and docker unavailable in local environment",
+    "npm": "not run: npm unavailable in local environment"
   }
 }
