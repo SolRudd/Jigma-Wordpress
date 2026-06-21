@@ -997,13 +997,14 @@
     var unmapped = 0;
     var native = 0;
     var fallback = 0;
-    var literalFallbackBlocks = [];
+    var cssByClass = new Map();
     var literalFallbackKeys = new Set();
     var sourceMap = sourceClassTargets(targets);
     var classByName = new Map();
 
     globalClasses.forEach(function (globalClass) {
       classByName.set(globalClass.name, globalClass);
+      cssByClass.set(globalClass.name, []);
     });
 
     rules.forEach(function (rule) {
@@ -1048,7 +1049,7 @@
         var blockKey = fallbackSelector + "\n" + (rule.media || "") + "\n" + formattedDeclarations;
         if (!literalFallbackKeys.has(blockKey)) {
           literalFallbackKeys.add(blockKey);
-          literalFallbackBlocks.push(block);
+          cssByClass.get(globalClass.name).push(block);
           fallback += fallbackDeclarations.length;
           attached += 1;
         }
@@ -1057,6 +1058,13 @@
 
       if (!ruleMatched && rule.selector.trim()) {
         unmapped += 1;
+      }
+    });
+
+    globalClasses.forEach(function (globalClass) {
+      var blocks = cssByClass.get(globalClass.name) || [];
+      if (blocks.length > 0) {
+        globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] = blocks.join("\n\n");
       }
     });
 
@@ -1072,8 +1080,8 @@
       unmapped: unmapped,
       native: native,
       fallback: fallback,
-      literalFallbackCss: literalFallbackBlocks.join("\n\n"),
-      literalFallbackRuleCount: literalFallbackBlocks.length,
+      literalFallbackCss: "",
+      literalFallbackRuleCount: literalFallbackKeys.size,
     };
   }
 
@@ -1163,21 +1171,6 @@
     var cssResult = attachCss(state.css, built.targets, globalClasses, warnings);
     var optionalCodeElement = null;
 
-    if (cssResult.literalFallbackCss) {
-      built.content.push({
-        id: hash("jigma-component-styles:" + cssResult.literalFallbackCss.slice(0, 120)),
-        name: "code",
-        parent: 0,
-        children: [],
-        settings: {
-          executeCode: false,
-          css: cssResult.literalFallbackCss,
-          cssCode: cssResult.literalFallbackCss,
-        },
-        label: "Jigma Component Styles",
-      });
-    }
-
     if (state.js.trim() && state.includeJsCode) {
       optionalCodeElement = {
         id: hash("jigma-js-review:" + state.js.slice(0, 120)),
@@ -1209,7 +1202,7 @@
         notes: [
           "Generated inside the Bricks builder environment.",
           "BEM classes are created as native editable Bricks classes.",
-          "Matching CSS declarations use native Bricks class settings with literal BEM fallback CSS for unsupported rules.",
+          "Matching CSS declarations use native Bricks class settings with literal BEM Custom CSS on the owning class for unsupported rules.",
           state.includeJsCode
             ? "JavaScript is included as a disabled Code element for manual Bricks review."
             : "JavaScript and external dependencies require manual Bricks review.",
@@ -1236,7 +1229,7 @@
         nativeStyleMappedCount: cssResult.native,
         customCssFallbackCount: cssResult.fallback,
         literalFallbackRuleCount: cssResult.literalFallbackRuleCount,
-        classFallbackStrategy: cssResult.literalFallbackCss ? "literal-bem" : "none",
+        classFallbackStrategy: cssResult.fallback > 0 ? "literal-bem" : "none",
         classReferenceValid: classAudit.missing === 0,
         missingClassReferenceCount: classAudit.missing,
         duplicateClassIdCount: 0,

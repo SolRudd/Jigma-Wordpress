@@ -101,6 +101,7 @@ export const templates: JigmaTemplate[] = [
   max-width: 900px;
   margin: 0;
   font-size: clamp(48px, 7vw, 84px);
+  font-weight: 900;
   line-height: 0.98;
 }
 
@@ -357,18 +358,18 @@ export const templates: JigmaTemplate[] = [
   <div class="jg-services__grid">
     <article class="jg-services__card">
       <span class="jg-services__number">01</span>
-      <h3 class="jg-services__card-title">Layer control</h3>
-      <p class="jg-services__card-text">Select, remove, expand, and undo layers before export.</p>
+      <h3 class="jg-services__card-title">Code to Builder</h3>
+      <p class="jg-services__card-text">Turn pasted HTML and CSS into a clean Bricks hierarchy without rebuilding from a blank canvas.</p>
     </article>
     <article class="jg-services__card">
       <span class="jg-services__number">02</span>
-      <h3 class="jg-services__card-title">Native classes</h3>
-      <p class="jg-services__card-text">Generate Bricks class records with editable native controls.</p>
+      <h3 class="jg-services__card-title">Clean BEM Classes</h3>
+      <p class="jg-services__card-text">Generate predictable class names that stay readable in the Bricks class manager.</p>
     </article>
     <article class="jg-services__card">
       <span class="jg-services__number">03</span>
-      <h3 class="jg-services__card-title">Fallback CSS</h3>
-      <p class="jg-services__card-text">Preserve advanced CSS on the closest matching class.</p>
+      <h3 class="jg-services__card-title">Native Styling</h3>
+      <p class="jg-services__card-text">Map common CSS into Bricks controls and keep advanced fallback CSS on the owning class.</p>
     </article>
   </div>
 </section>`,
@@ -425,6 +426,10 @@ export const templates: JigmaTemplate[] = [
   background: #ffffff;
   box-shadow: 0 18px 46px rgba(15, 23, 42, 0.06);
   clip-path: inset(0 round 16px);
+}
+
+.jg-services__card:hover {
+  transform: translateY(-4px);
 }
 
 .jg-services__number {
@@ -485,6 +490,7 @@ export const templates: JigmaTemplate[] = [
       <li class="jg-product__item">Native class settings for common CSS</li>
       <li class="jg-product__item">Scoped fallback CSS for advanced effects</li>
     </ul>
+    <a class="jg-product__button" href="#copy">Copy Bricks Structure</a>
   </div>
 </section>`,
     css: `.jg-product {
@@ -578,6 +584,18 @@ export const templates: JigmaTemplate[] = [
 .jg-product__item {
   list-style: none;
   color: #334155;
+}
+
+.jg-product__button {
+  display: inline-flex;
+  width: max-content;
+  margin-top: 28px;
+  padding: 14px 20px;
+  color: #ffffff;
+  border-radius: 12px;
+  background: #2563eb;
+  font-weight: 850;
+  text-decoration: none;
 }
 
 @container (max-width: 720px) {

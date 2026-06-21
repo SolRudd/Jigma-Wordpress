@@ -521,6 +521,11 @@ function applyNativeSetting(
     return true;
   }
 
+  if (property === "align-content") {
+    settings[key("_alignContent")] = value;
+    return true;
+  }
+
   if (property === "justify-content") {
     settings[key("_justifyContent")] = value;
     return true;
@@ -533,6 +538,11 @@ function applyNativeSetting(
 
   if (property === "grid-template-rows") {
     settings[key("_gridTemplateRows")] = value;
+    return true;
+  }
+
+  if (property === "grid-auto-flow") {
+    settings[key("_gridAutoFlow")] = value;
     return true;
   }
 
@@ -606,6 +616,11 @@ function applyNativeSetting(
     return true;
   }
 
+  if (property === "z-index") {
+    settings[key("_zIndex")] = value;
+    return true;
+  }
+
   if (property === "inset") {
     mergeObjectSetting(settings, key("_inset"), spacingFromShorthand(value));
     return true;
@@ -649,6 +664,9 @@ function applyNativeSetting(
     "text-align",
     "text-transform",
     "text-decoration",
+    "text-indent",
+    "white-space",
+    "word-break",
   ]);
   if (typographyPropertyMap.has(property)) {
     mergeObjectSetting(settings, key("_typography"), { [property]: value });
@@ -770,6 +788,11 @@ function applyNativeSetting(
 
   if (property === "opacity") {
     settings[key("_opacity")] = value;
+    return true;
+  }
+
+  if (property === "transform") {
+    settings[key("_transform")] = value;
     return true;
   }
 
@@ -1004,10 +1027,6 @@ function getSelectorClassTokens(selector: string) {
   return tokens;
 }
 
-function getBlockClassName(className: string) {
-  return className.split("__")[0].split("--")[0];
-}
-
 function getPreferredClassTarget(
   className: string,
   classMap: Map<string, Set<ClassCssTarget>>,
@@ -1029,7 +1048,6 @@ function selectorNeedsScopedFallback(selector: string) {
 function getOwningClassTarget(
   selector: string,
   classMap: Map<string, Set<ClassCssTarget>>,
-  targetByClassName: Map<string, ClassCssTarget>,
 ) {
   const tokens = getSelectorClassTokens(selector);
   const matchedTargets = tokens
@@ -1039,13 +1057,6 @@ function getOwningClassTarget(
   const explicitBlock = matchedTargets.find((target) => !target.className.includes("__"));
   if (explicitBlock) {
     return explicitBlock;
-  }
-
-  for (const target of matchedTargets) {
-    const blockTarget = targetByClassName.get(getBlockClassName(target.className));
-    if (blockTarget) {
-      return blockTarget;
-    }
   }
 
   return matchedTargets[0] ?? null;
@@ -1308,9 +1319,8 @@ export function attachCssToGlobalClasses(
   const warnings: ConversionWarning[] = [];
   const classMap = new Map<string, Set<ClassCssTarget>>();
   const idMap = new Map<string, Set<ClassCssTarget>>();
-  const targetByClassName = new Map<string, ClassCssTarget>();
   const attachmentBuckets = new Map<ClassCssTarget, ClassCssBucket>();
-  const literalFallbackBlocks: string[] = [];
+  const literalFallbackBuckets = new Map<ClassCssTarget, string[]>();
   const literalFallbackKeys = new Set<string>();
   const fallbackRuleCountByClassName = new Map<string, number>();
   const classFallbackStrategy = options.classFallbackStrategy ?? "literal-bem";
@@ -1327,9 +1337,6 @@ export function attachCssToGlobalClasses(
   const styledClassIds = new Set<string>();
 
   targets.forEach((target) => {
-    if (!targetByClassName.has(target.className)) {
-      targetByClassName.set(target.className, target);
-    }
     unique([...target.sourceClasses, target.className]).forEach((className) =>
       addClassMapEntry(classMap, className, target)
     );
@@ -1385,7 +1392,7 @@ export function attachCssToGlobalClasses(
     }
 
     literalFallbackKeys.add(key);
-    literalFallbackBlocks.push(cssBlock);
+    literalFallbackBuckets.set(target, [...(literalFallbackBuckets.get(target) ?? []), cssBlock]);
     incrementFallbackRuleCount(target);
   };
 
@@ -1399,7 +1406,7 @@ export function attachCssToGlobalClasses(
     }
 
     literalFallbackKeys.add(key);
-    literalFallbackBlocks.push(rawCss.trim());
+    literalFallbackBuckets.set(target, [...(literalFallbackBuckets.get(target) ?? []), rawCss.trim()]);
     incrementFallbackRuleCount(target);
   };
 
@@ -1547,7 +1554,7 @@ export function attachCssToGlobalClasses(
         }
 
         if (selectorNeedsScopedFallback(selector) || pseudo.unsupported) {
-          const owner = getOwningClassTarget(selector, classMap, targetByClassName);
+          const owner = getOwningClassTarget(selector, classMap);
           const tokens = getSelectorClassTokens(selector);
           const missingTokens = tokens.filter((token) => !getPreferredClassTarget(token.className, classMap));
           if (!owner || missingTokens.length > 0) {
@@ -1672,6 +1679,16 @@ export function attachCssToGlobalClasses(
     }
   });
 
+  literalFallbackBuckets.forEach((blocks, target) => {
+    const existing = typeof target.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] === "string"
+      ? `${target.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD]}`.trim()
+      : "";
+    const cssValue = blocks.join("\n\n");
+    target.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] = existing
+      ? `${existing}\n\n${cssValue}`
+      : cssValue;
+  });
+
   return {
     warnings,
     attachedRuleCount,
@@ -1685,8 +1702,8 @@ export function attachCssToGlobalClasses(
     pseudoRuleCount,
     unresolvedSelectorCount: unmappedRuleCount,
     styledClassIds,
-    fallbackCss: literalFallbackBlocks.join("\n\n"),
-    fallbackStrategy: classFallbackStrategy === "literal-bem" && literalFallbackBlocks.length > 0
+    fallbackCss: "",
+    fallbackStrategy: classFallbackStrategy === "literal-bem" && literalFallbackBuckets.size > 0
       ? "literal-bem"
       : classFallbackStrategy === "bricks-class-root" && attachmentBuckets.size > 0
       ? "bricks-class-root"

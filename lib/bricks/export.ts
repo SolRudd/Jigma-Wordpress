@@ -1031,7 +1031,11 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     );
   }
 
-  const fallbackCssAudit = auditLiteralFallbackCss(classCss.fallbackCss ?? "", globalClasses);
+  const classCustomCss = globalClasses
+    .map((globalClass) => `${globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`)
+    .filter((css) => css.trim().length > 0)
+    .join("\n\n");
+  const fallbackCssAudit = auditLiteralFallbackCss(classCustomCss, globalClasses);
   if (fallbackCssAudit.missingClassSelectorCount > 0 || fallbackCssAudit.elementIdSelectorCount > 0) {
     pushWarning(
       warnings,
@@ -1064,14 +1068,6 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       executeCode: false,
       css: scopedCss.css,
       cssCode: scopedCss.css,
-    }));
-  }
-
-  if (shouldCreateNativeBemClasses && classCss.fallbackCss?.trim()) {
-    content.push(makeCodeElement("jigma-component-styles", "Jigma Component Styles", {
-      executeCode: false,
-      css: classCss.fallbackCss,
-      cssCode: classCss.fallbackCss,
     }));
   }
 
@@ -1144,8 +1140,8 @@ export function createBricksExport(input: ConversionInput): BricksExport {
         shouldCreateScopedCssBlock
           ? "CSS was exported as a scoped generated CSS block."
           : shouldCreateNativeBemClasses
-          ? classCss.fallbackCss?.trim()
-            ? "Matching CSS declarations are owned by generated Bricks class records with one literal BEM fallback stylesheet for unsupported CSS."
+          ? classCustomCss
+            ? "Matching CSS declarations are owned by generated Bricks class records; unsupported declarations use literal BEM Custom CSS on the owning class."
             : "Matching CSS declarations are owned by generated Bricks class records."
           : shouldAttachElementCss
           ? "Matching CSS declarations were attached directly to exported elements."

@@ -230,11 +230,11 @@ function getCssPayload(result: ReturnType<typeof createBricksExport>) {
     .join("\n");
 }
 
-function getComponentFallbackCss(result: ReturnType<typeof createBricksExport>) {
-  return result.content
-    .filter((element) => element.label === "Jigma Component Styles")
-    .map((element) => `${element.settings.css ?? ""}`)
-    .join("\n");
+function getAllClassCustomCss(result: ReturnType<typeof createBricksExport>) {
+  return result.globalClasses
+    ?.map((entry) => `${entry.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`)
+    .filter((css) => css.trim().length > 0)
+    .join("\n\n") ?? "";
 }
 
 function getElementByBemClass(
@@ -419,6 +419,11 @@ describe("Bricks export", () => {
     expect(proofBar?.prefix).toBe("jg");
     expect(proofBar?.builderTarget).toBe("bricks");
     expect(proofBar?.testedBreakpoints).toEqual(["desktop", "tablet", "mobile"]);
+    expect(getTemplateByKey("jigma-hero")?.css).toContain("font-weight: 900");
+    expect(getTemplateByKey("services")?.html).toContain("Code to Builder");
+    expect(getTemplateByKey("services")?.html).toContain("Clean BEM Classes");
+    expect(getTemplateByKey("services")?.html).toContain("Native Styling");
+    expect(getTemplateByKey("product-showcase")?.html).toContain("Copy Bricks Structure");
     expect(getTemplateByKey("missing-template")).toBeNull();
   });
 
@@ -437,7 +442,7 @@ describe("Bricks export", () => {
       const classCss = first.globalClasses?.map((entry) =>
         `${entry.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`
       ).join("\n") ?? "";
-      const fallbackCss = getComponentFallbackCss(first);
+      const fallbackCss = getAllClassCustomCss(first);
 
       expect(first.validation.hierarchyValid, template.name).toBe(true);
       expect(first.validation.classReferenceValid, template.name).toBe(true);
@@ -456,7 +461,7 @@ describe("Bricks export", () => {
         second.globalClasses?.map((entry) => entry.id),
       );
       expect(first.content.some((element) => element.label === "Generated BEM CSS")).toBe(false);
-      expect(first.content.filter((element) => element.label === "Jigma Component Styles")).toHaveLength(1);
+      expect(first.content.filter((element) => element.label === "Jigma Component Styles")).toHaveLength(0);
       expect(classCss).not.toContain(".card ");
       expect(classCss).not.toContain(".title");
       expect(classCss).not.toContain("div > span");
@@ -495,7 +500,7 @@ describe("Bricks export", () => {
       const classCustomCss = classRecords
         .map((entry) => `${entry.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`)
         .filter((css) => css.trim().length > 0);
-      const fallbackCss = getComponentFallbackCss(result);
+      const fallbackCss = getAllClassCustomCss(result);
 
       expect(result.validation.hierarchyValid, fixture.templateName).toBe(true);
       expect(result.validation.classReferenceValid, fixture.templateName).toBe(true);
@@ -571,11 +576,11 @@ describe("Bricks export", () => {
       expect(result.content.some((element) => element.label === "Generated BEM CSS"), fixture.templateName)
         .toBe(false);
       expect(result.content.filter((element) => element.label === "Jigma Component Styles"), fixture.templateName)
-        .toHaveLength(1);
+        .toHaveLength(0);
       expect(result.content.some((element) =>
         Object.keys(element.settings).some((key) => key !== "_cssGlobalClasses")
       ), fixture.templateName).toBe(true);
-      expect(classCustomCss, fixture.templateName).toHaveLength(0);
+      expect(classCustomCss.length, fixture.templateName).toBeGreaterThan(0);
       expect(fallbackCss.length, fixture.templateName).toBeGreaterThan(0);
       expect(fallbackCss, fixture.templateName).toContain(fixture.expected.rootClass);
       expect(fallbackCss, fixture.templateName).not.toContain("%root%");
@@ -707,24 +712,24 @@ describe("Bricks export", () => {
       projectPrefix: "jg",
       blockName: "media-hero",
     });
-    expect(getComponentFallbackCss(gradientOverlay)).toContain(
+    expect(getGlobalClassCss(gradientOverlay, "media-hero")).toContain(
       'background: linear-gradient(rgba(0,0,0,.45), rgba(0,0,0,.45)), url("/images/hero.jpg");',
     );
-    expect(getComponentFallbackCss(gradientOverlay)).toContain(".media-hero {");
+    expect(getGlobalClassCss(gradientOverlay, "media-hero")).toContain(".media-hero {");
     expect(gradientOverlay.jigmaMeta.assetManifest?.summary.overlaysMapped).toBe(1);
 
     const beforeOverlay = exportFor(mediaFixtures[6].html, mediaFixtures[6].css, "", {
       projectPrefix: "jg",
       blockName: "media-hero",
     });
-    expect(getComponentFallbackCss(beforeOverlay)).toContain(".media-hero::before");
+    expect(getGlobalClassCss(beforeOverlay, "media-hero")).toContain(".media-hero::before");
     expect(getGlobalClassSettings(beforeOverlay, "media-hero")._position).toBe("relative");
 
     const multiBackground = exportFor(mediaFixtures[7].html, mediaFixtures[7].css, "", {
       projectPrefix: "jg",
       blockName: "media-hero",
     });
-    expect(getComponentFallbackCss(multiBackground)).toContain(
+    expect(getGlobalClassCss(multiBackground, "media-hero")).toContain(
       'background-image: url("/images/noise.png"), linear-gradient(#111, #333), url("/images/hero.jpg");',
     );
 
@@ -754,7 +759,7 @@ describe("Bricks export", () => {
       blockName: "media-tabs",
     });
     expect(jsDefault.content.filter((element) => element.label === "media-tabs JavaScript")).toHaveLength(0);
-    expect(jsDefault.content.filter((element) => element.label === "Jigma Component Styles")).toHaveLength(1);
+    expect(jsDefault.content.filter((element) => element.label === "Jigma Component Styles")).toHaveLength(0);
     expect(jsDefault.validation.unsignedJavaScriptCodeCount).toBe(1);
     expect(jsDefault.warnings.some((warning) => warning.code === "javascript.review_required")).toBe(true);
 
@@ -1093,7 +1098,6 @@ describe("Bricks export", () => {
     expect(metricNumbers.every((element) => element.label === "Hero Metric Number")).toBe(true);
     expect(metricLabels.every((element) => element.label === "Hero Metric Label")).toBe(true);
 
-    const fallbackCss = getComponentFallbackCss(result);
     const sectionCss = getGlobalClassCss(result, "jg-hero");
     const titleCss = getGlobalClassCss(result, "jg-hero__title");
     const statsCss = getGlobalClassCss(result, "jg-hero__stats");
@@ -1113,10 +1117,9 @@ describe("Bricks export", () => {
     const metricNumberSettings = getGlobalClassSettings(result, "jg-hero__metric-number");
     const metricLabelSettings = getGlobalClassSettings(result, "jg-hero__metric-label");
 
-    expect(sectionCss).toBe("");
-    expect(fallbackCss).toContain(".jg-hero {");
-    expect(fallbackCss).toContain("background: radial-gradient(circle at 80% 10%, rgba(139, 92, 246, 0.45), transparent 36%), #080b16;");
-    expect(fallbackCss).not.toContain(".hero-section");
+    expect(sectionCss).toContain(".jg-hero {");
+    expect(sectionCss).toContain("background: radial-gradient(circle at 80% 10%, rgba(139, 92, 246, 0.45), transparent 36%), #080b16;");
+    expect(sectionCss).not.toContain(".hero-section");
     expect(sectionSettings._heightMin).toBe("720px");
     expect(sectionSettings._padding).toEqual({
       top: "64px",
@@ -1133,7 +1136,7 @@ describe("Bricks export", () => {
     });
 
     expect(titleCss).toBe("");
-    expect(fallbackCss).not.toContain(".hero-title");
+    expect(getAllClassCustomCss(result)).not.toContain(".hero-title");
     expect(titleSettings._typography).toEqual({
       "font-size": "clamp(48px, 7vw, 84px)",
       "line-height": "0.96",
@@ -1235,7 +1238,7 @@ describe("Bricks export", () => {
       "",
       { projectPrefix: "jg", minifyElementCss: true },
     );
-    const fallbackCss = getComponentFallbackCss(result);
+    const fallbackCss = getGlobalClassCss(result, "jg-hero__title");
     const titleSettings = getGlobalClassSettings(result, "jg-hero__title");
 
     expect(titleSettings._typography).toEqual({
@@ -1245,10 +1248,10 @@ describe("Bricks export", () => {
     });
     expect(titleSettings["_typography:tablet_portrait"]).toEqual({ "font-size": "42px" });
     expect(fallbackCss).toContain(".jg-hero__title{filter:blur(0);}");
-    expect(fallbackCss).toContain("@media (max-width: 768px){.jg-hero__title{transform:translateY(0);}}");
+    expect(titleSettings["_transform:tablet_portrait"]).toBe("translateY(0)");
     expect(fallbackCss).not.toContain("%root%");
     expect(result.content.some((element) => element.label === "Generated BEM CSS")).toBe(false);
-    expect(result.content.some((element) => element.label === "Jigma Component Styles")).toBe(true);
+    expect(result.content.some((element) => element.label === "Jigma Component Styles")).toBe(false);
     expect(result.globalClasses?.length).toBeGreaterThan(0);
   });
 
@@ -1724,7 +1727,8 @@ describe("Bricks export", () => {
         : []
     );
     const secondaryButton = getElementByLabel(first, "Test Button Secondary");
-    const fallbackCss = getComponentFallbackCss(first);
+    const fallbackCss = getGlobalClassCss(first, "jg-test__title");
+    const buttonSettings = getGlobalClassSettings(first, "jg-test__button");
 
     expect(first.validation.classFallbackStrategy).toBe("literal-bem");
     expect(first.validation.classReferenceValid).toBe(true);
@@ -1745,7 +1749,7 @@ describe("Bricks export", () => {
     expect(first.content.some((element) => `${element.settings._cssClasses ?? ""}`.includes("jg-test"))).toBe(false);
     expect(first.content.some((element) => BRICKS_ELEMENT_CUSTOM_CSS_FIELD in element.settings)).toBe(false);
     expect(first.content.some((element) => element.label === "Generated BEM CSS")).toBe(false);
-    expect(first.content.filter((element) => element.label === "Jigma Component Styles")).toHaveLength(1);
+    expect(first.content.filter((element) => element.label === "Jigma Component Styles")).toHaveLength(0);
 
     expect(getGlobalClassSettings(first, "jg-test")._padding).toEqual({
       top: "80px",
@@ -1760,6 +1764,7 @@ describe("Bricks export", () => {
     });
     expect(getGlobalClassSettings(first, "jg-test__text")._opacity).toBe("0.7");
     expect(getGlobalClassSettings(first, "jg-test__button")._display).toBe("inline-flex");
+    expect(buttonSettings["_transform:hover"]).toBe("translateY(-2px)");
     expect(getGlobalClassSettings(first, "jg-test__button--secondary")._border).toEqual({
       width: { top: "1px", right: "1px", bottom: "1px", left: "1px" },
       style: "solid",
@@ -1767,14 +1772,12 @@ describe("Bricks export", () => {
     });
     expect(fallbackCss).toContain(".jg-test__title {");
     expect(fallbackCss).toContain("text-wrap: balance;");
-    expect(fallbackCss).toContain(".jg-test__button:hover {");
-    expect(fallbackCss).toContain("transform: translateY(-2px);");
     expect(fallbackCss).not.toContain("%root%");
     expect(fallbackCss).not.toContain(".test-title");
     expect(fallbackCss).not.toMatch(/#brxe-[a-z0-9]+/);
     expect(first.jigmaMeta.classAudit?.find((entry) => entry.className === "jg-test__title")?.fallbackCssRuleCount)
       .toBe(1);
-    expect(first.jigmaMeta.classAudit?.find((entry) => entry.className === "jg-test__button")?.fallbackStrategy)
+    expect(first.jigmaMeta.classAudit?.find((entry) => entry.className === "jg-test__title")?.fallbackStrategy)
       .toBe("literal-bem");
   });
 
@@ -1813,7 +1816,7 @@ describe("Bricks export", () => {
     const sectionSettings = getGlobalClassSettings(result, "jg-test");
     const contentSettings = getGlobalClassSettings(result, "jg-test__content");
     const titleSettings = getGlobalClassSettings(result, "jg-test__title");
-    const fallbackCss = getComponentFallbackCss(result);
+    const fallbackCss = getGlobalClassCss(result, "jg-test__title");
 
     expect(sectionSettings._padding).toEqual({
       top: "48px",
@@ -1837,16 +1840,15 @@ describe("Bricks export", () => {
       color: { raw: "#ffffff" },
     });
     expect(titleSettings["_typography:tablet_portrait"]).toEqual({ "font-size": "36px" });
-    expect(getGlobalClassCss(result, "jg-test__title")).toBe("");
-    expect(fallbackCss).toContain(".jg-test__title {");
-    expect(fallbackCss).toContain("transform: translateY(0);");
+    expect(titleSettings._transform).toBe("translateY(0)");
+    expect(fallbackCss).not.toContain("transform: translateY(0);");
     expect(fallbackCss).toContain("@media (max-width: 820px) {");
     expect(fallbackCss).toContain("filter: blur(0);");
     expect(fallbackCss).not.toContain("%root%");
     expect(fallbackCss).not.toContain(".test-title");
     expect(result.validation.nativeStyleMappedCount).toBeGreaterThan(0);
-    expect(result.validation.customCssFallbackCount).toBe(2);
-    expect(result.validation.literalFallbackRuleCount).toBe(2);
+    expect(result.validation.customCssFallbackCount).toBe(1);
+    expect(result.validation.literalFallbackRuleCount).toBe(1);
     expect(result.validation.classFallbackStrategy).toBe("literal-bem");
   });
 
@@ -1867,7 +1869,7 @@ describe("Bricks export", () => {
       "",
       { projectPrefix: "jg", blockName: "card" },
     );
-    const cardCss = getComponentFallbackCss(result);
+    const cardCss = getGlobalClassCss(result, "jg-card");
     const buttonSettings = getGlobalClassSettings(result, "jg-card__button");
 
     expect(cardCss).toContain(".jg-card:hover .jg-card__button-icon {");
@@ -1912,16 +1914,17 @@ describe("Bricks export", () => {
       "",
       { projectPrefix: "jg", blockName: "card" },
     );
-    const fallbackCss = getComponentFallbackCss(result);
+    const cardCss = getGlobalClassCss(result, "jg-card");
+    const titleCss = getGlobalClassCss(result, "jg-card__title");
 
-    expect(fallbackCss).toContain("@keyframes cardPulse");
-    expect(fallbackCss).toContain(".jg-card {");
-    expect(fallbackCss).toContain("animation: cardPulse 6s ease-in-out infinite;");
-    expect(fallbackCss).toContain(".jg-card__title::after {");
-    expect(fallbackCss).toContain('content: "";');
-    expect(fallbackCss).toContain("@container (max-width: 640px) {");
-    expect(fallbackCss).toContain("text-wrap: balance;");
-    expect(fallbackCss).not.toContain("%root%");
+    expect(cardCss).toContain("@keyframes cardPulse");
+    expect(cardCss).toContain(".jg-card {");
+    expect(cardCss).toContain("animation: cardPulse 6s ease-in-out infinite;");
+    expect(titleCss).toContain(".jg-card__title::after {");
+    expect(titleCss).toContain('content: "";');
+    expect(titleCss).toContain("@container (max-width: 640px) {");
+    expect(titleCss).toContain("text-wrap: balance;");
+    expect(`${cardCss}\n${titleCss}`).not.toContain("%root%");
     expect(result.validation.pseudoRuleCount).toBeGreaterThan(0);
     expect(result.validation.customCssFallbackCount).toBeGreaterThanOrEqual(4);
     expect(result.validation.externalDependencyCount).toBeGreaterThan(0);
@@ -2045,7 +2048,8 @@ describe("Bricks export", () => {
     expect(php).not.toContain("|| '_cssGlobalClasses' === $key");
     expect(panelJs).toContain("globalClasses: globalClasses");
     expect(panelJs).toContain("settings._cssGlobalClasses");
-    expect(panelJs).toContain("Jigma Component Styles");
+    expect(panelJs).not.toContain("Jigma Component Styles");
+    expect(panelJs).toContain("literal BEM Custom CSS on the owning class");
     expect(panelJs).toContain("nativeStyleMappedCount");
     expect(panelJs).not.toContain("_exists");
     expect(panelJs).not.toContain("_jigmaPluginPoc");
@@ -2070,7 +2074,7 @@ describe("Bricks export", () => {
       `.hero__button:hover { opacity: 0.8; }
 .hero__button::before { content: ""; }`,
     );
-    const buttonCss = getComponentFallbackCss(result);
+    const buttonCss = getGlobalClassCss(result, "acme-hero__button");
     const buttonSettings = getGlobalClassSettings(result, "acme-hero__button");
 
     expect(buttonSettings["_opacity:hover"]).toBe("0.8");
