@@ -184,7 +184,7 @@ export function inspectDependencies(html: string, css: string, js: string) {
   let urlMatch: RegExpExecArray | null;
   while ((urlMatch = urlPattern.exec(css)) !== null) {
     const value = urlMatch[1];
-    if (value.startsWith("data:")) {
+    if (value.startsWith("data:") || value.startsWith("#")) {
       continue;
     }
 

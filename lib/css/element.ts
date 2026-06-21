@@ -338,6 +338,34 @@ function isSimpleColorValue(value: string) {
     );
 }
 
+function extractSingleUrl(value: string) {
+  const matches = [...value.matchAll(/url\(\s*(?:"([^"]+)"|'([^']+)'|([^"')\s]+))\s*\)/gi)];
+  if (matches.length !== 1) {
+    return "";
+  }
+
+  return (matches[0][1] ?? matches[0][2] ?? matches[0][3] ?? "").trim();
+}
+
+function isSimpleGradientValue(value: string) {
+  return /^(linear-gradient|radial-gradient|conic-gradient)\(/i.test(value.trim()) &&
+    !/url\(/i.test(value);
+}
+
+function parseBackgroundMediaValue(value: string) {
+  const trimmed = value.trim();
+  const url = extractSingleUrl(trimmed);
+  if (url && trimmed.replace(/url\(\s*(?:"[^"]+"|'[^']+'|[^"')\s]+)\s*\)/i, "").trim() === "") {
+    return { image: { url } };
+  }
+
+  if (isSimpleGradientValue(trimmed)) {
+    return { gradient: { value: trimmed } };
+  }
+
+  return null;
+}
+
 function spacingFromShorthand(value: string) {
   const parts = splitCssList(value);
   const [top, right = top, bottom = top, left = right] = parts;
@@ -611,8 +639,71 @@ function applyNativeSetting(
     return true;
   }
 
+  if (property === "background-image") {
+    const background = parseBackgroundMediaValue(value);
+    if (!background) {
+      return false;
+    }
+
+    mergeObjectSetting(settings, key("_background"), background);
+    return true;
+  }
+
   if (property === "background" && isSimpleColorValue(value)) {
     mergeObjectSetting(settings, key("_background"), { color: makeColorValue(value) });
+    return true;
+  }
+
+  if (property === "background" && !value.includes(",")) {
+    const background = parseBackgroundMediaValue(value);
+    if (background) {
+      mergeObjectSetting(settings, key("_background"), background);
+      return true;
+    }
+  }
+
+  if (property === "background-position") {
+    mergeObjectSetting(settings, key("_background"), { position: value });
+    return true;
+  }
+
+  if (property === "background-size") {
+    mergeObjectSetting(settings, key("_background"), { size: value });
+    return true;
+  }
+
+  if (property === "background-repeat") {
+    mergeObjectSetting(settings, key("_background"), { repeat: value });
+    return true;
+  }
+
+  if (property === "background-attachment") {
+    mergeObjectSetting(settings, key("_background"), { attachment: value });
+    return true;
+  }
+
+  if (property === "background-blend-mode") {
+    mergeObjectSetting(settings, key("_background"), { blendMode: value });
+    return true;
+  }
+
+  if (property === "background-clip") {
+    mergeObjectSetting(settings, key("_background"), { clip: value });
+    return true;
+  }
+
+  if (property === "background-origin") {
+    mergeObjectSetting(settings, key("_background"), { origin: value });
+    return true;
+  }
+
+  if (property === "object-fit") {
+    settings[key("_objectFit")] = value;
+    return true;
+  }
+
+  if (property === "object-position") {
+    settings[key("_objectPosition")] = value;
     return true;
   }
 

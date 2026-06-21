@@ -23,6 +23,7 @@ export interface OutputOptions {
   includeExternalCss: boolean;
   includeExternalScripts: boolean;
   minifyElementCss: boolean;
+  includeJavaScriptCode?: boolean;
 }
 
 export interface ParsedElement {
@@ -86,6 +87,73 @@ export interface ConversionWarning {
   suggestedAction?: string;
 }
 
+export type AssetType =
+  | "image"
+  | "responsive-image"
+  | "background-image"
+  | "svg-inline"
+  | "svg-file"
+  | "font"
+  | "stylesheet"
+  | "script"
+  | "video"
+  | "iframe"
+  | "data-uri"
+  | "css-url";
+
+export type AssetUsage =
+  | "element"
+  | "background"
+  | "overlay"
+  | "mask"
+  | "pseudo-element"
+  | "source-set"
+  | "script"
+  | "dependency";
+
+export type AssetStatus =
+  | "native"
+  | "preserved"
+  | "imported"
+  | "action-required"
+  | "unsupported"
+  | "failed";
+
+export interface AssetManifestItem {
+  id: string;
+  type: AssetType;
+  source: "html" | "css" | "js";
+  originalUrl: string;
+  normalizedUrl: string;
+  ownerNodeId?: string;
+  ownerClass?: string;
+  usage: AssetUsage;
+  mimeType?: string;
+  alt?: string;
+  width?: number;
+  height?: number;
+  external: boolean;
+  importable: boolean;
+  status: AssetStatus;
+  warnings: string[];
+}
+
+export interface AssetManifest {
+  items: AssetManifestItem[];
+  summary: {
+    nativeImages: number;
+    responsiveImages: number;
+    backgroundImages: number;
+    overlaysMapped: number;
+    inlineSvgs: number;
+    svgSignaturesRequired: number;
+    codeElements: number;
+    externalAssets: number;
+    failedAssets: number;
+  };
+  warnings: ConversionWarning[];
+}
+
 export interface BricksElement {
   id: string;
   name: string;
@@ -134,6 +202,11 @@ export interface BricksExportValidation {
   emptyStyledClassCount: number;
   dependencyWarningCount: number;
   jsWarningCount: number;
+  nativeImageCount?: number;
+  responsiveImageCount?: number;
+  backgroundImageCount?: number;
+  overlayMappedCount?: number;
+  failedAssetCount?: number;
 }
 
 export interface BricksClassAuditEntry {
@@ -158,6 +231,7 @@ export interface BricksExport {
     stylingMode: StylingMode;
     notes: string[];
     classAudit?: BricksClassAuditEntry[];
+    assetManifest?: AssetManifest;
   };
   warnings: ConversionWarning[];
   validation: BricksExportValidation;

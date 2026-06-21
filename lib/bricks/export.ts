@@ -16,6 +16,9 @@ import {
   getRenderableRoots,
   serializeElement,
 } from "../parser/html.ts";
+import { createAssetManifest } from "../assets/manifest.ts";
+import { getImageDescriptor } from "../assets/images.ts";
+import { createBricksImageSettings } from "../output/bricks/media.ts";
 import { countSvgInternalNodes, sanitizeSvgMarkup } from "../svg/sanitize.ts";
 import {
   createBemClassFactory,
@@ -45,6 +48,7 @@ const HIDDEN_STRUCTURE_TAGS = new Set([
   "title",
   "base",
   "template",
+  "source",
 ]);
 
 const TEXT_TAGS = new Set(["p", "span", "strong", "em", "small", "b", "i", "mark", "li"]);
@@ -65,6 +69,8 @@ const SUPPORTED_TAGS = new Set([
   "a",
   "button",
   "img",
+  "picture",
+  "iframe",
   "ul",
   "ol",
   "li",
@@ -179,6 +185,14 @@ function getBricksMapping(element: ParsedElement) {
     return { name: "image", supported: true };
   }
 
+  if (tag === "picture") {
+    return { name: "image", supported: true };
+  }
+
+  if (tag === "iframe") {
+    return { name: "code", supported: true };
+  }
+
   if (tag === "a") {
     return { name: "text-link", supported: true };
   }
@@ -239,13 +253,12 @@ function getContentSettings(element: ParsedElement, name: string) {
   }
 
   if (name === "image") {
-    const src = element.attributes.src;
-    if (src) {
-      settings.image = { url: src };
-    }
-    if (element.attributes.alt) {
-      settings.altText = element.attributes.alt;
-    }
+    Object.assign(settings, createBricksImageSettings(getImageDescriptor(element)));
+  }
+
+  if (name === "code" && tag === "iframe") {
+    settings.executeCode = false;
+    settings.html = serializeElement(element, { path: "iframe", skipScripts: true });
   }
 
   if (name === "svg") {
@@ -627,6 +640,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   const shouldAttachElementCss = exportMode === "element-styles";
   const shouldCreateGlobalClasses = shouldCreateNativeBemClasses;
   const shouldCreateScopedCssBlock = exportMode === "scoped-css-block";
+  const assetManifest = createAssetManifest(input);
   const parsed = getRenderableRoots(input.html);
   const deletedLayerIds = input.deletedLayerIds ?? new Set<string>();
   const excludedLayerIds = input.excludedLayerIds ?? new Set<string>();
@@ -650,6 +664,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   let unsignedSvgCodeCount = 0;
   let unsignedJavaScriptCodeCount = 0;
 
+  assetManifest.warnings.forEach((warning) => pushGroupedWarning(warnings, warning));
   parsed.warnings.forEach((warning) => pushWarning(warnings, warning));
 
   if (input.options.stylingMode === "native-experimental") {
@@ -837,6 +852,10 @@ export function createBricksExport(input: ConversionInput): BricksExport {
 
     let visibleChildIndex = 0;
     element.children.forEach((child) => {
+      if (element.tagName === "picture") {
+        return;
+      }
+
       if (HIDDEN_STRUCTURE_TAGS.has(child.tagName)) {
         return;
       }
@@ -996,16 +1015,29 @@ export function createBricksExport(input: ConversionInput): BricksExport {
   if (input.js.trim()) {
     jsWarningCount += 1;
     unsignedJavaScriptCodeCount += 1;
+    if (input.options.includeJavaScriptCode) {
+      content.push(makeCodeElement("jigma-javascript-review", `${bemFactory.blockName} JavaScript`, {
+        executeCode: false,
+        javascript: input.js,
+        js: input.js,
+      }));
+    }
     pushGroupedWarning(warnings, {
       id: "javascript-review-required",
       code: "javascript.review_required",
       severity: "action-required",
       title: "JavaScript review required",
-      summary: "JavaScript was detected but not converted into builder-native behavior.",
-      message: "JavaScript was detected but not converted into builder-native behavior.",
+      summary: input.options.includeJavaScriptCode
+        ? "JavaScript was included as one disabled unsigned Code element for review."
+        : "JavaScript was detected but not converted into builder-native behavior.",
+      message: input.options.includeJavaScriptCode
+        ? "JavaScript was included as one disabled unsigned Code element for review."
+        : "JavaScript was detected but not converted into builder-native behavior.",
       details: [
-        "Jigma does not silently insert JavaScript into the default Bricks structure.",
-        "Review behavior manually before adding it as custom code or a Bricks Code element.",
+        input.options.includeJavaScriptCode
+          ? "Jigma created one disabled Bricks Code element and did not fabricate a signature."
+          : "Jigma does not silently insert JavaScript into the default Bricks structure.",
+        "Review behavior manually before enabling custom code in Bricks.",
       ],
       suggestedAction: "Rebuild interactions with Bricks-native controls where possible, or add reviewed JavaScript manually.",
     });
@@ -1034,6 +1066,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       targetBricksVersion: TARGET_BRICKS_VERSION,
       stylingMode: "bem-css",
       classAudit: classAudit.entries,
+      assetManifest,
       notes: [
         `Generated BEM block: ${bemFactory.blockName}.`,
         shouldCreateNativeBemClasses
@@ -1085,6 +1118,11 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       emptyStyledClassCount: classAudit.emptyStyledClassCount,
       dependencyWarningCount: externalCode.dependencies.length,
       jsWarningCount,
+      nativeImageCount: assetManifest.summary.nativeImages,
+      responsiveImageCount: assetManifest.summary.responsiveImages,
+      backgroundImageCount: assetManifest.summary.backgroundImages,
+      overlayMappedCount: assetManifest.summary.overlaysMapped,
+      failedAssetCount: assetManifest.summary.failedAssets,
     },
   };
 }

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createBricksExport, TARGET_BRICKS_VERSION } from "../lib/bricks/export.ts";
+import { createAssetManifest } from "../lib/assets/manifest.ts";
 import { BRICKS_ELEMENT_CUSTOM_CSS_FIELD } from "../lib/css/element.ts";
 import { inspectDependencies } from "../lib/dependencies/inspect.ts";
 import {
@@ -32,6 +33,7 @@ import JigmaBuilder, {
 } from "../src/components/JigmaBuilder.tsx";
 import type { OutputOptions } from "../types/jigma.ts";
 import { goldenExportFixtures } from "./fixtures/golden_exports.ts";
+import { mediaFixtures } from "./fixtures/media.ts";
 import { sectionFixtures } from "./fixtures/sections.ts";
 
 const defaultOptions: OutputOptions = {
@@ -567,6 +569,203 @@ describe("Bricks export", () => {
       expect(parsedPayload.content.length, fixture.templateName).toBe(result.content.length);
       expect(parsedPayload.globalClasses?.length, fixture.templateName).toBe(classRecords.length);
     });
+  });
+
+  it("preserves media SVG overlay and code fidelity fixtures", () => {
+    expect(mediaFixtures.map((fixture) => fixture.name)).toEqual([
+      "standard jpg image with alt",
+      "webp image with lazy loading",
+      "picture srcset responsive image",
+      "linked image",
+      "background image cover center",
+      "background image plus gradient overlay",
+      "before color overlay",
+      "multiple background layers",
+      "inline svg one path",
+      "complex svg gradients and paths",
+      "svg mask clipPath",
+      "external svg file",
+      "svg sprite use",
+      "unsafe svg script onload",
+      "css mask image url",
+      "javascript interaction",
+      "inline onclick handler",
+      "third party iframe embed",
+      "missing asset",
+      "duplicate image url",
+    ]);
+
+    mediaFixtures.forEach((fixture) => {
+      const result = exportFor(fixture.html, fixture.css, fixture.js ?? "", {
+        projectPrefix: "jg",
+        blockName: "media",
+      });
+      const classIds = result.globalClasses?.map((entry) => entry.id) ?? [];
+
+      expect(result.validation.hierarchyValid, fixture.name).toBe(true);
+      expect(result.validation.classReferenceValid, fixture.name).toBe(true);
+      expect(classIds.every((id) => /^[a-z0-9]{6}$/.test(id)), fixture.name).toBe(true);
+      expect(result.content.some((element) => element.label === "Generated BEM CSS"), fixture.name).toBe(false);
+      result.content.forEach((element) => {
+        const ids = Array.isArray(element.settings._cssGlobalClasses)
+          ? element.settings._cssGlobalClasses
+          : [];
+        expect(ids.every((id) => classIds.includes(`${id}`)), fixture.name).toBe(true);
+      });
+    });
+
+    const standardImage = exportFor(mediaFixtures[0].html, mediaFixtures[0].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-card",
+    });
+    const standardImageElement = standardImage.content.find((element) => element.name === "image")!;
+    expect(standardImageElement.settings.image).toEqual({
+      url: "/images/team.jpg",
+      width: 1200,
+      height: 800,
+    });
+    expect(standardImageElement.settings.altText).toBe("Our team");
+    expect(standardImageElement.settings.aspectRatio).toBe("1200 / 800");
+    expect(getGlobalClassSettings(standardImage, "media-card__image")._objectFit).toBe("cover");
+    expect(getGlobalClassSettings(standardImage, "media-card__image")._objectPosition).toBe("center");
+
+    const lazyImage = exportFor(mediaFixtures[1].html, mediaFixtures[1].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-card",
+    }).content.find((element) => element.name === "image")!;
+    expect(lazyImage.settings.loading).toBe("lazy");
+    expect(lazyImage.settings.decoding).toBe("async");
+
+    const picture = exportFor(mediaFixtures[2].html, mediaFixtures[2].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-card",
+    });
+    const pictureImage = picture.content.find((element) => element.name === "image")!;
+    expect(picture.content.filter((element) => element.name === "image")).toHaveLength(1);
+    expect(pictureImage.settings.image).toEqual({ url: "/images/team.jpg" });
+    expect(pictureImage.settings.srcset).toBe("/images/team.jpg 1200w, /images/team@2x.jpg 2400w");
+    expect(pictureImage.settings.sizes).toBe("100vw");
+    expect(pictureImage.settings.responsiveSources).toEqual([
+      {
+        media: "(max-width: 720px)",
+        srcset: "/images/team-mobile.webp 720w",
+        type: "image/webp",
+      },
+      {
+        media: "(min-width: 721px)",
+        srcset: "/images/team.webp 1200w",
+        type: "image/webp",
+      },
+    ]);
+
+    const linked = exportFor(mediaFixtures[3].html, mediaFixtures[3].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-card",
+    });
+    const linkedElement = linked.content.find((element) => element.name === "text-link")!;
+    expect(linkedElement.settings.link).toEqual({
+      type: "external",
+      url: "/gallery",
+    });
+
+    const background = exportFor(mediaFixtures[4].html, mediaFixtures[4].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-hero",
+    });
+    expect(getGlobalClassSettings(background, "media-hero")._background).toEqual({
+      image: { url: "/images/hero.jpg" },
+      size: "cover",
+      position: "center",
+      repeat: "no-repeat",
+    });
+    expect(background.jigmaMeta.assetManifest?.summary.backgroundImages).toBe(1);
+
+    const gradientOverlay = exportFor(mediaFixtures[5].html, mediaFixtures[5].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-hero",
+    });
+    expect(getGlobalClassCss(gradientOverlay, "media-hero")).toContain(
+      'background: linear-gradient(rgba(0,0,0,.45), rgba(0,0,0,.45)), url("/images/hero.jpg");',
+    );
+    expect(gradientOverlay.jigmaMeta.assetManifest?.summary.overlaysMapped).toBe(1);
+
+    const beforeOverlay = exportFor(mediaFixtures[6].html, mediaFixtures[6].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-hero",
+    });
+    expect(getGlobalClassCss(beforeOverlay, "media-hero")).toContain("%root%::before");
+    expect(getGlobalClassSettings(beforeOverlay, "media-hero")._position).toBe("relative");
+
+    const multiBackground = exportFor(mediaFixtures[7].html, mediaFixtures[7].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-hero",
+    });
+    expect(getGlobalClassCss(multiBackground, "media-hero")).toContain(
+      'background-image: url("/images/noise.png"), linear-gradient(#111, #333), url("/images/hero.jpg");',
+    );
+
+    const complexSvg = exportFor(mediaFixtures[9].html, mediaFixtures[9].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-icon",
+    });
+    const svgElement = complexSvg.content.find((element) => element.name === "svg")!;
+    expect(complexSvg.content.filter((element) => element.name === "svg")).toHaveLength(1);
+    expect(complexSvg.content.some((element) => element.name === "path")).toBe(false);
+    expect(`${svgElement.settings.code ?? ""}`).toContain("<path");
+    expect(complexSvg.warnings.filter((warning) => warning.code === "svg.signature_required")).toHaveLength(1);
+    expect(complexSvg.warnings.some((warning) => warning.message.includes("<path>"))).toBe(false);
+
+    const unsafeSvg = exportFor(mediaFixtures[13].html, mediaFixtures[13].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-icon",
+    });
+    const unsafeSvgCode = `${unsafeSvg.content.find((element) => element.name === "svg")?.settings.code ?? ""}`;
+    expect(unsafeSvgCode).not.toContain("<script");
+    expect(unsafeSvgCode).not.toContain("onload");
+    expect(unsafeSvgCode).not.toContain("onclick");
+    expect(unsafeSvg.warnings.filter((warning) => warning.code === "svg.sanitized")).toHaveLength(1);
+
+    const jsDefault = exportFor(mediaFixtures[15].html, mediaFixtures[15].css, mediaFixtures[15].js, {
+      projectPrefix: "jg",
+      blockName: "media-tabs",
+    });
+    expect(jsDefault.content.filter((element) => element.name === "code")).toHaveLength(0);
+    expect(jsDefault.validation.unsignedJavaScriptCodeCount).toBe(1);
+    expect(jsDefault.warnings.some((warning) => warning.code === "javascript.review_required")).toBe(true);
+
+    const jsOptional = exportFor(mediaFixtures[15].html, mediaFixtures[15].css, mediaFixtures[15].js, {
+      projectPrefix: "jg",
+      blockName: "media-tabs",
+      includeJavaScriptCode: true,
+    });
+    const jsCodeElements = jsOptional.content.filter((element) => element.name === "code");
+    expect(jsCodeElements).toHaveLength(1);
+    expect(jsCodeElements[0].label).toBe("media-tabs JavaScript");
+    expect(jsCodeElements[0].settings.executeCode).toBe(false);
+    expect(`${jsCodeElements[0].settings.javascript ?? ""}`).toContain("addEventListener");
+
+    const inlineEvent = exportFor(mediaFixtures[16].html, mediaFixtures[16].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-modal",
+    });
+    expect(JSON.stringify(inlineEvent.content)).not.toContain("onclick");
+    expect(inlineEvent.warnings.some((warning) => warning.code === "code.inline_event_handler")).toBe(true);
+
+    const iframe = exportFor(mediaFixtures[17].html, mediaFixtures[17].css, "", {
+      projectPrefix: "jg",
+      blockName: "media-embed",
+    });
+    const iframeCode = iframe.content.find((element) => element.name === "code")!;
+    expect(iframeCode.settings.executeCode).toBe(false);
+    expect(`${iframeCode.settings.html ?? ""}`).toContain("<iframe");
+
+    const duplicateManifest = createAssetManifest({
+      html: mediaFixtures[19].html,
+      css: mediaFixtures[19].css,
+      js: "",
+      options: { ...defaultOptions, projectPrefix: "jg", blockName: "media-grid" },
+    });
+    expect(duplicateManifest.items.filter((item) => item.normalizedUrl === "/images/reused.jpg")).toHaveLength(1);
   });
 
   it("keeps the beta workspace focused and generated JSON hidden by default", () => {

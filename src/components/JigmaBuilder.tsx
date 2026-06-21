@@ -1935,6 +1935,34 @@ export default function JigmaBuilder() {
                 <dd>{bricksExport.validation.externalDependencyCount}</dd>
               </div>
               <div>
+                <dt>Native images</dt>
+                <dd>{bricksExport.validation.nativeImageCount ?? 0}</dd>
+              </div>
+              <div>
+                <dt>Responsive images</dt>
+                <dd>{bricksExport.validation.responsiveImageCount ?? 0}</dd>
+              </div>
+              <div>
+                <dt>Background images</dt>
+                <dd>{bricksExport.validation.backgroundImageCount ?? 0}</dd>
+              </div>
+              <div>
+                <dt>Overlays mapped</dt>
+                <dd>{bricksExport.validation.overlayMappedCount ?? 0}</dd>
+              </div>
+              <div>
+                <dt>Inline SVGs</dt>
+                <dd>{bricksExport.validation.unsignedSvgCodeCount}</dd>
+              </div>
+              <div>
+                <dt>Unsigned code</dt>
+                <dd>{bricksExport.validation.unsignedSvgCodeCount + bricksExport.validation.unsignedJavaScriptCodeCount}</dd>
+              </div>
+              <div>
+                <dt>Failed assets</dt>
+                <dd>{bricksExport.validation.failedAssetCount ?? 0}</dd>
+              </div>
+              <div>
                 <dt>Issues requiring review</dt>
                 <dd>{warningCount}</dd>
               </div>

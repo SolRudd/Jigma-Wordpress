@@ -1,4 +1,5 @@
 import type { LayerNode, ParsedElement } from "../../types/jigma.ts";
+import { stripUnsafeEventAttributes } from "../assets/code.ts";
 import { sanitizeSvgMarkup } from "../svg/sanitize.ts";
 
 const VOID_TAGS = new Set([
@@ -26,6 +27,7 @@ const HIDDEN_STRUCTURE_TAGS = new Set([
   "title",
   "base",
   "template",
+  "source",
 ]);
 
 function decodeBasicEntities(value: string) {
@@ -347,7 +349,7 @@ export function serializeElement(
     return "";
   }
 
-  const attributes = { ...element.attributes };
+  const attributes = stripUnsafeEventAttributes(element.attributes);
   if (options.addLayerAttributes) {
     attributes["data-jigma-layer"] = options.path;
     if (options.activeLayerId === options.path) {

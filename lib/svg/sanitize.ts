@@ -2,6 +2,8 @@ export interface SvgSanitizationReport {
   removedTags: string[];
   removedAttributes: string[];
   externalReferences: string[];
+  changed: boolean;
+  requiresSignature: boolean;
   requiresReview: boolean;
   malformed: boolean;
 }
@@ -93,8 +95,26 @@ function blankReport(): SvgSanitizationReport {
     removedTags: [],
     removedAttributes: [],
     externalReferences: [],
+    changed: false,
+    requiresSignature: true,
     requiresReview: true,
     malformed: false,
+  };
+}
+
+function finalizeReport(report: SvgSanitizationReport): SvgSanitizationReport {
+  const removedTags = unique(report.removedTags);
+  const removedAttributes = unique(report.removedAttributes);
+  const externalReferences = unique(report.externalReferences);
+
+  return {
+    ...report,
+    removedTags,
+    removedAttributes,
+    externalReferences,
+    changed: report.malformed || removedTags.length > 0 || removedAttributes.length > 0,
+    requiresReview: true,
+    requiresSignature: true,
   };
 }
 
@@ -200,6 +220,7 @@ export function sanitizeSvgMarkup(rawSvg: string): SvgSanitizationResult {
       report: {
         ...report,
         malformed: true,
+        changed: true,
       },
     };
   }
@@ -266,11 +287,7 @@ export function sanitizeSvgMarkup(rawSvg: string): SvgSanitizationResult {
     return {
       svg: stripped,
       report: {
-        ...report,
-        removedTags: unique(report.removedTags),
-        removedAttributes: unique(report.removedAttributes),
-        externalReferences: unique(report.externalReferences),
-        requiresReview: true,
+        ...finalizeReport(report),
       },
     };
   }
@@ -286,6 +303,7 @@ export function sanitizeSvgMarkup(rawSvg: string): SvgSanitizationResult {
       report: {
         ...report,
         malformed: true,
+        changed: true,
       },
     };
   }
@@ -294,13 +312,7 @@ export function sanitizeSvgMarkup(rawSvg: string): SvgSanitizationResult {
 
   return {
     svg: safeSvg,
-    report: {
-      ...report,
-      removedTags: unique(report.removedTags),
-      removedAttributes: unique(report.removedAttributes),
-      externalReferences: unique(report.externalReferences),
-      requiresReview: true,
-    },
+    report: finalizeReport(report),
   };
 }
 
