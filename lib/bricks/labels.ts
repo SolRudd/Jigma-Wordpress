@@ -85,6 +85,10 @@ export function createBricksElementLabel(options: LabelOptions) {
 
   if (parsed.elementWords.length === 0) {
     const suffix = ROOT_SUFFIX_BY_TAG[options.tagName] ?? "Element";
+    if (blockLabel.toLowerCase() === suffix.toLowerCase()) {
+      return blockLabel;
+    }
+
     return `${blockLabel} ${suffix}`.trim();
   }
 

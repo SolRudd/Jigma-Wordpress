@@ -666,6 +666,11 @@ textarea::-webkit-scrollbar-thumb,
   border-color: rgba(139, 92, 246, 0.44);
 }
 
+.template-reset-button {
+  margin-top: 10px;
+  width: 100%;
+}
+
 .template-thumb {
   background:
     linear-gradient(135deg, rgba(168, 85, 247, 0.76), rgba(59, 130, 246, 0.66)),

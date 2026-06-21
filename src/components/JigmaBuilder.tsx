@@ -859,6 +859,23 @@ export default function JigmaBuilder() {
     setStatus(`${template.name} loaded`);
   };
 
+  const resetActiveTemplate = () => {
+    const template = getTemplateByKey(activeTemplate);
+    if (!template) {
+      setStatus("No template selected to reset");
+      return;
+    }
+
+    const confirmed = typeof window === "undefined" ||
+      window.confirm(`Reset ${template.name} and replace the current editor contents?`);
+    if (!confirmed) {
+      return;
+    }
+
+    loadTemplate(template.key);
+    setStatus(`${template.name} reset`);
+  };
+
   const saveLocalPreset = () => {
     const preset = createLocalPreset(options);
     const nextPresets = upsertLocalPreset(savedPresets, preset);
@@ -1406,6 +1423,14 @@ export default function JigmaBuilder() {
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              className="secondary-button template-reset-button"
+              disabled={!getTemplateByKey(activeTemplate)}
+              onClick={resetActiveTemplate}
+            >
+              Reset Template
+            </button>
           </section>
 
           <section className="app-panel settings-panel">

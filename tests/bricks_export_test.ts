@@ -402,8 +402,9 @@ describe("Bricks export", () => {
 
   it("ships a focused template library for the beta workspace", () => {
     expect(templates.map((template) => template.name)).toEqual([
+      "Jigma Header",
       "Jigma Hero",
-      "Proof Bar",
+      "Jigma Proof Bar",
       "Services",
       "iPhone/Product Showcase",
       "Pricing",
@@ -411,15 +412,31 @@ describe("Bricks export", () => {
       "CTA",
     ]);
 
-    const proofBar = getTemplateByKey("proof-bar");
+    const header = getTemplateByKey("jigma-header");
+    const hero = getTemplateByKey("jigma-hero");
+    const proofBar = getTemplateByKey("jigma-proof");
 
-    expect(proofBar?.html).toContain("jg-proof__number");
-    expect(proofBar?.css).toContain(".jg-proof__shell");
+    expect(header?.html).toContain("jigma-header__toggle");
+    expect(header?.html).toContain("jigma-header__logo-svg");
+    expect(header?.javascript).toContain("aria-expanded");
+    expect(header?.javascript).not.toContain("onclick");
+    expect(header?.prefix).toBe("jigma");
+    expect(header?.blockName).toBe("header");
+    expect(hero?.html).toContain("jigma-hero__rotator");
+    expect(hero?.html).toContain("jigma-hero__card");
+    expect(hero?.css).toContain("@keyframes jh-rotate");
+    expect(hero?.css).toContain("prefers-reduced-motion");
+    expect(hero?.prefix).toBe("jigma");
+    expect(hero?.blockName).toBe("hero");
+    expect(proofBar?.html).toContain("jigma-proof__value");
+    expect(proofBar?.html).toContain("jigma-proof__icon-svg");
+    expect(proofBar?.css).toContain(".jigma-proof__metrics");
     expect(proofBar?.javascript).toBe("");
-    expect(proofBar?.prefix).toBe("jg");
+    expect(proofBar?.prefix).toBe("jigma");
+    expect(proofBar?.blockName).toBe("proof");
     expect(proofBar?.builderTarget).toBe("bricks");
-    expect(proofBar?.testedBreakpoints).toEqual(["desktop", "tablet", "mobile"]);
-    expect(getTemplateByKey("jigma-hero")?.css).toContain("font-weight: 900");
+    expect(proofBar?.testedBreakpoints).toContain("390");
+    expect(hero?.css).toContain("font-weight: 900");
     expect(getTemplateByKey("services")?.html).toContain("Code to Builder");
     expect(getTemplateByKey("services")?.html).toContain("Clean BEM Classes");
     expect(getTemplateByKey("services")?.html).toContain("Native Styling");
@@ -588,7 +605,8 @@ describe("Bricks export", () => {
       const selectorLines = fallbackCss.split("\n").filter((line) => line.trim().endsWith("{"));
       expect(selectorLines.every((line) => {
         const trimmed = line.trim();
-        return trimmed.startsWith(".jg-") || trimmed.startsWith("@") || /^\d/.test(trimmed);
+        return trimmed.startsWith(".jg-") || trimmed.startsWith(".jigma-") ||
+          trimmed.startsWith("@") || /^\d/.test(trimmed);
       }), fixture.templateName)
         .toBe(true);
 
@@ -808,6 +826,7 @@ describe("Bricks export", () => {
     expect(markup).toContain("Template Library");
     expect(markup).toContain("Hero");
     expect(markup).toContain("Proof Bar");
+    expect(markup).toContain("Reset Template");
     expect(markup).toContain("Save Preset locally");
     expect(markup).toContain("Load Preset locally");
     expect(markup).toContain("Export JSON");
@@ -841,6 +860,7 @@ describe("Bricks export", () => {
     expect(markup).toContain("Template Library");
     expect(markup).toContain("Jigma Hero");
     expect(markup).toContain("Proof Bar");
+    expect(markup).toContain("Reset Template");
     expect(markup).toContain('role="tablist" aria-label="Source editors"');
     expect(markup).toContain('id="source-tab-html"');
     expect(markup).toContain('id="source-tab-css"');
