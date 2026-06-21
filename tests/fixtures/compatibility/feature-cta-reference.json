@@ -1,0 +1,28 @@
+{
+  "content": [
+    { "name": "section", "label": ".lit-feature-cta", "children": [1] },
+    { "name": "div", "label": ".lit-feature-cta__inner", "children": [2] },
+    { "name": "div", "label": ".lit-feature-cta__content", "children": [3, 4, 5] },
+    {
+      "name": "heading",
+      "label": "#lit-feature-cta-title",
+      "children": [],
+      "settings": {
+        "_cssId": "lit-feature-cta-title",
+        "tag": "h2",
+        "text": "A Sustainable Future:<br>\nSmall Steps, Big Impact"
+      }
+    },
+    { "name": "text-basic", "label": ".lit-feature-cta__text", "children": [] },
+    { "name": "text-link", "label": ".lit-feature-cta__link", "children": [] }
+  ],
+  "globalClasses": [
+    "lit-feature-cta",
+    "lit-feature-cta__inner",
+    "lit-feature-cta__content",
+    "lit-feature-cta__title",
+    "lit-feature-cta__text",
+    "lit-feature-cta__link"
+  ],
+  "globalElements": []
+}

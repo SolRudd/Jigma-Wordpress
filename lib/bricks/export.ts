@@ -507,7 +507,110 @@ function makeCompatibilityClassList(originalClasses: string[], warnings: Convers
   return Array.from(new Set(makePreservedOriginalClassList(originalClasses, warnings)));
 }
 
-function createCompatibilityElementLabel(element: ParsedElement, bricksName: string) {
+function normalizeStepNumber(value: string) {
+  const numeric = value.match(/\d+/)?.[0] ?? "";
+  return numeric ? `${Number(numeric)}` : "";
+}
+
+function findFirstDescendant(element: ParsedElement, predicate: (child: ParsedElement) => boolean): ParsedElement | undefined {
+  for (const child of element.children) {
+    if (predicate(child)) {
+      return child;
+    }
+
+    const nested = findFirstDescendant(child, predicate);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return undefined;
+}
+
+function findProcessCardContext(element: ParsedElement, ancestors: ParsedElement[]) {
+  const card = [element, ...[...ancestors].reverse()].find((candidate) =>
+    getClassNames(candidate).some((className) => className === "lit-process-light__card")
+  );
+
+  if (!card) {
+    return {};
+  }
+
+  const marker = findFirstDescendant(card, (child) =>
+    getClassNames(child).some((className) => className === "lit-process-light__marker")
+  );
+  const title = findFirstDescendant(card, (child) =>
+    getClassNames(child).some((className) => className === "lit-process-light__card-title")
+  );
+  const step = normalizeStepNumber(card.attributes["data-step"] ?? getElementText(marker ?? card));
+  const titleText = getElementText(title ?? card).replace(/\s+/g, " ").trim();
+
+  return {
+    step,
+    title: titleText,
+  };
+}
+
+function createProcessCompatibilityLabel(
+  element: ParsedElement,
+  bricksName: string,
+  ancestors: ParsedElement[],
+  parentLabel?: string,
+) {
+  const classes = getClassNames(element);
+  const processClass = classes.find((className) =>
+    className === "lit-process-light" || className.startsWith("lit-process-light__")
+  );
+
+  if (!processClass && element.tagName !== "svg") {
+    return undefined;
+  }
+
+  const part = processClass?.split("__")[1]?.split("--")[0] ?? "";
+  const context = findProcessCardContext(element, ancestors);
+  const stepLabel = context.step ? `Step ${context.step}` : "Step";
+  const titleLabel = context.title || stepLabel;
+
+  if (element.tagName === "svg" || bricksName === "svg" || part === "icon-svg") {
+    if (parentLabel && /icon$/i.test(parentLabel)) {
+      return `${parentLabel} SVG`;
+    }
+
+    return `${titleLabel} Icon SVG`;
+  }
+
+  if (!part) {
+    return "Process Section";
+  }
+
+  const labelsByPart: Record<string, string> = {
+    shell: "Process Shell",
+    header: "Process Header",
+    title: "Process Title",
+    intro: "Process Intro",
+    track: "Process Track",
+    grid: "Process Grid",
+    card: context.step ? `Process Step ${context.step}` : `${titleLabel} Card`,
+    marker: `${stepLabel} Marker`,
+    icon: `${titleLabel} Icon`,
+    "card-title": `${titleLabel} Card Title`,
+    "card-text": `${titleLabel} Card Text`,
+  };
+
+  return labelsByPart[part];
+}
+
+function createCompatibilityElementLabel(
+  element: ParsedElement,
+  bricksName: string,
+  ancestors: ParsedElement[] = [],
+  parentLabel?: string,
+) {
+  const processLabel = createProcessCompatibilityLabel(element, bricksName, ancestors, parentLabel);
+  if (processLabel) {
+    return processLabel;
+  }
+
   if (element.attributes.id) {
     return `#${element.attributes.id}`;
   }
@@ -546,12 +649,13 @@ function buildExternalCode(
   css: string,
   js: string,
   warnings: ConversionWarning[],
+  suppressDependencyWarnings = false,
 ) {
   const dependencies = inspectDependencies(html, css, js);
   const lines: string[] = [];
 
   dependencies.forEach((dependency) => {
-    if (dependency.warning) {
+    if (dependency.warning && !suppressDependencyWarnings) {
       pushWarning(warnings, dependency.warning, "info");
     }
 
@@ -982,6 +1086,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     element: ParsedElement,
     parent: string | 0,
     path: string,
+    ancestors: ParsedElement[] = [],
   ): string | null => {
     if (HIDDEN_STRUCTURE_TAGS.has(element.tagName)) {
       return null;
@@ -1052,7 +1157,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
 
     const parentElement = parent === 0 ? undefined : contentById.get(parent);
     const elementLabel = compatibilityProfile
-      ? createCompatibilityElementLabel(element, mapping.name)
+      ? createCompatibilityElementLabel(element, mapping.name, ancestors, parentElement?.label)
       : createBricksElementLabel({
         bemClass: getLabelClass(assignment, classList),
         tagName: element.tagName,
@@ -1177,7 +1282,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
 
       const childPath = `${path}-${visibleChildIndex}`;
       visibleChildIndex += 1;
-      const childId = walkElement(child, id, childPath);
+      const childId = walkElement(child, id, childPath, [...ancestors, element]);
       if (childId) {
         bricksElement.children.push(childId);
       }
@@ -1352,7 +1457,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     }));
   }
 
-  const externalCode = buildExternalCode(input.options, input.html, input.css, input.js, warnings);
+  const externalCode = buildExternalCode(input.options, input.html, input.css, input.js, warnings, compatibilityProfile);
   if (externalCode.element) {
     content.unshift(externalCode.element);
   }

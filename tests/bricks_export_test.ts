@@ -74,19 +74,35 @@ const defaultOptions: OutputOptions = {
 };
 
 const featureCtaHtml = readFileSync(
-  new URL("./fixtures/feature-cta/source.html", import.meta.url),
+  new URL("./fixtures/compatibility/feature-cta.html", import.meta.url),
   "utf8",
 );
 const featureCtaCss = readFileSync(
-  new URL("./fixtures/feature-cta/source.css", import.meta.url),
+  new URL("./fixtures/compatibility/feature-cta.css", import.meta.url),
   "utf8",
 );
 const featureCtaReference = JSON.parse(readFileSync(
-  new URL("./fixtures/feature-cta/working-reference.json", import.meta.url),
+  new URL("./fixtures/compatibility/feature-cta-reference.json", import.meta.url),
   "utf8",
 )) as {
-  content: Array<{ name: string; children: unknown[]; label?: string; settings: Record<string, unknown> }>;
-  globalClasses: Array<{ name: string }>;
+  content: Array<{ name: string; children: unknown[]; label?: string; settings?: Record<string, unknown> }>;
+  globalClasses: string[];
+  globalElements: unknown[];
+};
+const processLightHtml = readFileSync(
+  new URL("./fixtures/compatibility/process-light.html", import.meta.url),
+  "utf8",
+);
+const processLightCss = readFileSync(
+  new URL("./fixtures/compatibility/process-light.css", import.meta.url),
+  "utf8",
+);
+const processLightReference = JSON.parse(readFileSync(
+  new URL("./fixtures/compatibility/process-light-reference.json", import.meta.url),
+  "utf8",
+)) as {
+  content: Array<{ name: string; children: number[]; label: string; settings?: Record<string, unknown> }>;
+  globalClasses: string[];
   globalElements: unknown[];
 };
 
@@ -484,6 +500,101 @@ describe("Bricks export", () => {
     expect(backgroundFamily?.value).toContain("forest-tablet.webp");
     expect(backgroundFamily?.value).toContain("forest-mobile.webp");
     expect(dependencies.filter((dependency) => dependency.value.includes("forest-"))).toHaveLength(1);
+  });
+
+  it("locks Process Light Bricks Compatibility structure and contextual labels", () => {
+    const result = exportFor(processLightHtml, processLightCss, "", compatibilityOptions);
+    const clipboard = serializeBricksClipboardPayload(result);
+    const labels = result.content.map((element) => element.label);
+    const names = result.content.map((element) => element.name);
+    const classNames = result.globalClasses?.map((entry) => entry.name) ?? [];
+
+    expect(result.validation.totalElements).toBe(31);
+    expect(result.validation.globalClassCount).toBe(17);
+    expect(names).toEqual(processLightReference.content.map((element) => element.name));
+    expect(labels).toEqual(processLightReference.content.map((element) => element.label));
+    expect(classNames).toEqual(processLightReference.globalClasses);
+    expect(clipboard.globalElements).toEqual(processLightReference.globalElements);
+
+    const shell = result.content.find((element) => element.label === "Process Shell")!;
+    const header = result.content.find((element) => element.label === "Process Header")!;
+    const track = result.content.find((element) => element.label === "Process Track")!;
+    const grid = result.content.find((element) => element.label === "Process Grid")!;
+    const step1 = result.content.find((element) => element.label === "Process Step 1")!;
+    const step4 = result.content.find((element) => element.label === "Process Step 4")!;
+    const discoverTitle = result.content.find((element) => element.label === "Discover Card Title")!;
+    const discoverText = result.content.find((element) => element.label === "Discover Card Text")!;
+    const monitorSvg = result.content.find((element) => element.label === "Monitor & Improve Icon SVG")!;
+
+    expect(shell.children).toEqual([header.id, track.id, grid.id]);
+    expect(header.settings.tag).toBe("header");
+    expect(step1.settings.tag).toBe("article");
+    expect(step4.settings.tag).toBe("article");
+    expect(discoverTitle.name).toBe("heading");
+    expect(discoverTitle.children).toEqual([]);
+    expect(discoverTitle.settings.tag).toBe("h3");
+    expect(discoverText.name).toBe("text-basic");
+    expect(discoverText.settings.tag).toBe("p");
+    expect(result.content.find((element) => element.label === "Step 1 Marker")?.settings.text).toBe("01");
+    expect(result.content.find((element) => element.label === "Step 4 Marker")?.settings.text).toBe("04");
+    expect(monitorSvg.name).toBe("svg");
+    expect(monitorSvg.children).toEqual([]);
+    expect(`${monitorSvg.settings.code ?? ""}`).toContain("<path");
+    expect(JSON.stringify(result.content)).not.toContain("Paragraph");
+    expect(JSON.stringify(result.content)).not.toContain("\"Svg\"");
+    expect(result.content.some((element) => element.name === "path")).toBe(false);
+  });
+
+  it("preserves Process Light class CSS, repeated class IDs, SVG groups, and minimal clipboard JSON", () => {
+    const result = exportFor(processLightHtml, processLightCss, "", compatibilityOptions);
+    const clipboard = serializeBricksClipboardPayload(result);
+    const cardClass = getGlobalClass(result, "lit-process-light__card")!;
+    const markerClass = getGlobalClass(result, "lit-process-light__marker")!;
+    const iconSvgClass = getGlobalClass(result, "lit-process-light__icon-svg")!;
+    const cardCss = getGlobalClassCss(result, "lit-process-light__card");
+    const trackCss = getGlobalClassCss(result, "lit-process-light__track");
+    const gridCss = getGlobalClassCss(result, "lit-process-light__grid");
+    const cardElements = result.content.filter((element) =>
+      Array.isArray(element.settings._cssGlobalClasses) &&
+      element.settings._cssGlobalClasses.includes(cardClass.id)
+    );
+    const markerElements = result.content.filter((element) =>
+      Array.isArray(element.settings._cssGlobalClasses) &&
+      element.settings._cssGlobalClasses.includes(markerClass.id)
+    );
+    const svgElements = result.content.filter((element) => element.name === "svg");
+    const svgWithClass = svgElements.filter((element) =>
+      Array.isArray(element.settings._cssGlobalClasses) &&
+      element.settings._cssGlobalClasses.includes(iconSvgClass.id)
+    );
+
+    expect(cardElements).toHaveLength(4);
+    expect(markerElements).toHaveLength(4);
+    expect(svgElements).toHaveLength(4);
+    expect(svgWithClass).toHaveLength(4);
+    expect(cardCss).toContain(".lit-process-light__card::before {");
+    expect(cardCss).toContain(".lit-process-light__card:hover::before {");
+    expect(trackCss).toContain(".lit-process-light__track::before {");
+    expect(gridCss).toContain("@media (max-width: 900px)");
+    expect(gridCss).toContain("@media (max-width: 560px)");
+    expect(getAllClassCustomCss(result)).not.toContain("%root%");
+    expect(result.validation.unresolvedSelectorCount).toBe(0);
+    expect(result.validation.missingClassReferenceCount).toBe(0);
+    expect(result.validation.invalidNestingCount).toBe(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0].code).toBe("svg.signature_required");
+    expect(result.warnings[0].count).toBe(4);
+    expect(Object.keys(clipboard).sort()).toEqual([
+      "content",
+      "globalClasses",
+      "globalElements",
+      "source",
+      "sourceUrl",
+      "version",
+    ]);
+    expect(JSON.stringify(clipboard)).not.toContain("jigmaMeta");
+    expect(JSON.stringify(clipboard)).not.toContain("validation");
+    expect(JSON.stringify(clipboard)).not.toContain("warnings");
   });
 
   it("defines the standalone HTML, CSS, and review-required JavaScript editors", () => {
