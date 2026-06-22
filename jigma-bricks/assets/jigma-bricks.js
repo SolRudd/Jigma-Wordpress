@@ -1,39 +1,44 @@
 (function () {
   "use strict";
 
-  if (window.JigmaBricksPanelLoaded) {
+  var ROOT_ID = "jigma-bricks-root";
+  var UI_KEY = "jigma_bricks_ui_v1";
+  var WORKSPACE_KEY = "jigma_bricks_workspace_v1";
+  var SAVED_SECTIONS_KEY = "jigma_bricks_saved_sections_v1";
+  var SCHEMA_VERSION = "bricks-compatibility.v1";
+
+  if (window.JigmaBricksPanelLoaded || document.getElementById(ROOT_ID)) {
     return;
   }
   window.JigmaBricksPanelLoaded = true;
 
   var config = window.JigmaBricksPlugin || {};
-  var storagePrefix = "jigma.bricks.beta.";
-  var savedSectionsKey = storagePrefix + "savedSections";
-  var dockOpenKey = storagePrefix + "dockOpen";
-  var dockHeightKey = storagePrefix + "dockHeight";
-  var selectedSectionId = "";
-
-  var state = {
-    html: "",
-    css: "",
-    js: "",
-    includeJavaScriptCode: false,
-    pageStylesDecision: "none",
-    lastRun: null,
-    target: null,
-    drawerOpen: false,
-    activeEditor: "html",
-  };
-
   var contentSummary = Array.isArray(config.contentSummary) ? config.contentSummary : [];
   var contentById = new Map(contentSummary.map(function (element) {
     return [String(element.id), element];
   }));
 
+  var defaultUi = {
+    dockState: "expanded",
+    dockHeight: 320,
+    editorWidths: { html: 1, css: 1, js: 1 },
+    visibleEditors: { html: true, css: true, js: true },
+    activeEditor: "html",
+    liveAnalysis: false,
+    confirmBeforeInsert: true,
+    restoreLastWorkspace: true,
+    clearAfterInsert: false,
+    openExpandedOnLoad: true,
+    rememberEditorWidths: true,
+    includeJavaScript: true,
+    pageCssMode: "ask",
+    classConflictMode: "ask",
+  };
+
   function el(tagName, className, text) {
     var node = document.createElement(tagName);
     if (className) node.className = className;
-    if (text) node.textContent = text;
+    if (typeof text === "string") node.textContent = text;
     return node;
   }
 
@@ -45,24 +50,94 @@
     }
   }
 
+  function mergeUi(input) {
+    var value = input && typeof input === "object" ? input : {};
+    return {
+      dockState: value.dockState || defaultUi.dockState,
+      dockHeight: Number(value.dockHeight || defaultUi.dockHeight),
+      editorWidths: Object.assign({}, defaultUi.editorWidths, value.editorWidths || {}),
+      visibleEditors: normalizeVisibility(Object.assign({}, defaultUi.visibleEditors, value.visibleEditors || {})),
+      activeEditor: value.activeEditor || defaultUi.activeEditor,
+      liveAnalysis: Boolean(value.liveAnalysis),
+      confirmBeforeInsert: value.confirmBeforeInsert !== false,
+      restoreLastWorkspace: value.restoreLastWorkspace !== false,
+      clearAfterInsert: Boolean(value.clearAfterInsert),
+      openExpandedOnLoad: value.openExpandedOnLoad !== false,
+      rememberEditorWidths: value.rememberEditorWidths !== false,
+      includeJavaScript: value.includeJavaScript !== false,
+      pageCssMode: ["ask", "include", "exclude"].indexOf(value.pageCssMode) === -1 ? "ask" : value.pageCssMode,
+      classConflictMode: ["ask", "reuse", "cancel"].indexOf(value.classConflictMode) === -1 ? "ask" : value.classConflictMode,
+    };
+  }
+
+  function normalizeVisibility(visible) {
+    var next = {
+      html: visible.html !== false,
+      css: visible.css !== false,
+      js: visible.js !== false,
+    };
+    if (!next.html && !next.css && !next.js) {
+      next.html = true;
+    }
+    return next;
+  }
+
+  var ui = mergeUi(safeJsonParse(localStorage.getItem(UI_KEY), defaultUi));
+  if (!ui.openExpandedOnLoad && !localStorage.getItem(UI_KEY)) {
+    ui.dockState = "collapsed";
+  }
+
+  var restoredWorkspace = ui.restoreLastWorkspace
+    ? safeJsonParse(localStorage.getItem(WORKSPACE_KEY), {})
+    : {};
+
+  var state = {
+    html: typeof restoredWorkspace.html === "string" ? restoredWorkspace.html : "",
+    css: typeof restoredWorkspace.css === "string" ? restoredWorkspace.css : "",
+    js: typeof restoredWorkspace.js === "string" ? restoredWorkspace.js : "",
+    lastRun: null,
+    target: null,
+    drawerOpen: false,
+    drawerMode: "review",
+    modal: null,
+    selectedSectionId: "",
+    pageStylesDecision: "none",
+    statusKind: "blocked",
+  };
+
+  var nodes = {};
+  var liveAnalysisTimer = 0;
+  var workspaceObserver = null;
+  var mutationObserver = null;
+
+  function persistUi() {
+    ui.visibleEditors = normalizeVisibility(ui.visibleEditors);
+    localStorage.setItem(UI_KEY, JSON.stringify(ui));
+  }
+
+  function persistWorkspace() {
+    if (!ui.restoreLastWorkspace) return;
+    localStorage.setItem(WORKSPACE_KEY, JSON.stringify({
+      html: state.html,
+      css: state.css,
+      js: state.js,
+    }));
+  }
+
   function readSavedSections() {
-    return safeJsonParse(localStorage.getItem(savedSectionsKey) || "[]", []).filter(function (item) {
+    return safeJsonParse(localStorage.getItem(SAVED_SECTIONS_KEY) || "[]", []).filter(function (item) {
       return item && typeof item === "object";
     });
   }
 
   function writeSavedSections(items) {
-    localStorage.setItem(savedSectionsKey, JSON.stringify(items));
-  }
-
-  function makeSectionName() {
-    return "Jigma Section " + new Date().toLocaleString();
+    localStorage.setItem(SAVED_SECTIONS_KEY, JSON.stringify(items));
   }
 
   function currentSource(name) {
     return {
       id: "section-" + Date.now().toString(36),
-      name: name || makeSectionName(),
+      name: name || "Jigma Section " + new Date().toLocaleString(),
       updatedAt: new Date().toISOString(),
       html: state.html,
       css: state.css,
@@ -74,25 +149,25 @@
 
   function saveCurrentSection() {
     var items = readSavedSections();
-    var existingIndex = selectedSectionId
-      ? items.findIndex(function (item) { return item.id === selectedSectionId; })
+    var existingIndex = state.selectedSectionId
+      ? items.findIndex(function (item) { return item.id === state.selectedSectionId; })
       : -1;
-    var next = currentSource(existingIndex >= 0 ? items[existingIndex].name : makeSectionName());
+    var next = currentSource(existingIndex >= 0 ? items[existingIndex].name : "");
     if (existingIndex >= 0) {
-      next.id = selectedSectionId;
+      next.id = state.selectedSectionId;
       items[existingIndex] = next;
     } else {
-      selectedSectionId = next.id;
+      state.selectedSectionId = next.id;
       items.unshift(next);
     }
-    writeSavedSections(items.slice(0, 40));
+    writeSavedSections(items.slice(0, 60));
     return next;
   }
 
   function duplicateCurrentSection() {
     var items = readSavedSections();
-    var source = selectedSectionId
-      ? items.find(function (item) { return item.id === selectedSectionId; })
+    var source = state.selectedSectionId
+      ? items.find(function (item) { return item.id === state.selectedSectionId; })
       : null;
     var next = Object.assign({}, source || currentSource("Jigma Section"), {
       id: "section-" + Date.now().toString(36),
@@ -100,8 +175,8 @@
       updatedAt: new Date().toISOString(),
     });
     items.unshift(next);
-    writeSavedSections(items.slice(0, 40));
-    selectedSectionId = next.id;
+    writeSavedSections(items.slice(0, 60));
+    state.selectedSectionId = next.id;
     return next;
   }
 
@@ -109,8 +184,11 @@
     state.html = section.html || "";
     state.css = section.css || "";
     state.js = section.javascript || "";
-    selectedSectionId = section.id || "";
+    state.selectedSectionId = section.id || "";
     state.lastRun = null;
+    persistWorkspace();
+    syncEditors();
+    updateStatus("Section loaded.");
   }
 
   function selectedIdFromGlobals() {
@@ -132,19 +210,18 @@
     var active = document.querySelector(
       "[data-bricks-element-id].active,[data-bricks-element-id].selected,[data-bricks-id].active,[data-bricks-id].selected,[data-control-key='selectedElement']"
     );
-    if (active) {
-      return active.getAttribute("data-bricks-element-id") ||
-        active.getAttribute("data-bricks-id") ||
-        active.getAttribute("data-id") ||
-        "";
-    }
-
-    return "";
+    if (!active) return "";
+    return active.getAttribute("data-bricks-element-id") ||
+      active.getAttribute("data-bricks-id") ||
+      active.getAttribute("data-id") ||
+      "";
   }
 
   function describeTarget(id) {
-    function targetLabel(summary, targetId) {
-      return (summary.label || summary.name || "Element") + " \u00b7 " + summary.name + " \u00b7 " + targetId;
+    function label(summary, targetId) {
+      var name = summary.name || "Element";
+      var displayName = summary.label || name;
+      return displayName + " \u00b7 " + name + " \u00b7 " + targetId;
     }
 
     if (!id) {
@@ -153,6 +230,7 @@
         exists: false,
         acceptsChildren: false,
         label: "No target selected",
+        shortLabel: "No target selected",
         message: "Select a container in Bricks before inserting.",
       };
     }
@@ -164,20 +242,21 @@
         exists: false,
         acceptsChildren: false,
         label: "Unknown target \u00b7 " + id,
+        shortLabel: "Unknown target",
         message: "The selected Bricks element is not in the saved page content. Save or reload Bricks, then select it again.",
       };
     }
 
     if (!summary.acceptsChildren) {
-      var lockedMessage = summary.locked
-        ? "The selected element is locked or unsuitable for insertion. Select another nestable element."
-        : "The selected element cannot contain children. Select its parent container or another nestable element.";
       return {
         id: String(id),
         exists: true,
         acceptsChildren: false,
-        label: targetLabel(summary, id),
-        message: lockedMessage,
+        label: label(summary, id),
+        shortLabel: summary.label || summary.name || "Element",
+        message: summary.locked
+          ? "The selected element is locked or unsuitable for insertion. Select another nestable element."
+          : "The selected element cannot contain children.",
       };
     }
 
@@ -185,9 +264,110 @@
       id: String(id),
       exists: true,
       acceptsChildren: true,
-      label: targetLabel(summary, id),
+      label: label(summary, id),
+      shortLabel: summary.label || summary.name || "Element",
       message: "Ready to insert.",
     };
+  }
+
+  function findWorkspaceNode() {
+    var selectors = [
+      "#bricks-builder-iframe-wrapper",
+      "#bricks-iframe-wrapper",
+      ".bricks-builder-iframe-wrapper",
+      ".bricks-iframe-wrapper",
+      ".bricks-preview-wrapper",
+      ".bricks-builder-preview",
+      "[data-builder-canvas]",
+      "[data-bricks-builder-canvas]",
+      "#bricks-builder",
+    ];
+
+    for (var index = 0; index < selectors.length; index += 1) {
+      var node = document.querySelector(selectors[index]);
+      if (node && node.getBoundingClientRect().width > 240) {
+        return node;
+      }
+    }
+
+    return null;
+  }
+
+  function panelBoundsFallback() {
+    var left = 12;
+    var right = 12;
+    Array.from(document.body.children).forEach(function (node) {
+      if (node.id === ROOT_ID || !node.getBoundingClientRect) return;
+      var style = window.getComputedStyle(node);
+      if (style.position !== "fixed" && style.position !== "absolute" && style.position !== "sticky") return;
+      var rect = node.getBoundingClientRect();
+      if (rect.height < window.innerHeight * 0.45 || rect.width < 120 || rect.width > window.innerWidth * 0.45) return;
+      if (rect.left <= 4) left = Math.max(left, rect.right + 8);
+      if (rect.right >= window.innerWidth - 4) right = Math.max(right, window.innerWidth - rect.left + 8);
+    });
+    return { left: left, right: right, fallback: true };
+  }
+
+  function updateDockBounds() {
+    if (!nodes.root) return;
+    var workspace = findWorkspaceNode();
+    var bounds;
+
+    if (workspace) {
+      var rect = workspace.getBoundingClientRect();
+      bounds = {
+        left: Math.max(8, rect.left),
+        right: Math.max(8, window.innerWidth - rect.right),
+        fallback: false,
+      };
+      nodes.root.dataset.workspace = "detected";
+    } else {
+      bounds = panelBoundsFallback();
+      nodes.root.dataset.workspace = "fallback";
+    }
+
+    nodes.root.style.setProperty("--jigma-left", Math.round(bounds.left) + "px");
+    nodes.root.style.setProperty("--jigma-right", Math.round(bounds.right) + "px");
+    nodes.root.style.setProperty("--jigma-bottom", "0px");
+    if (nodes.workspaceNotice) {
+      nodes.workspaceNotice.hidden = !bounds.fallback;
+    }
+  }
+
+  function observeWorkspace() {
+    if (workspaceObserver) workspaceObserver.disconnect();
+    if (mutationObserver) mutationObserver.disconnect();
+
+    if ("ResizeObserver" in window) {
+      workspaceObserver = new ResizeObserver(function () {
+        window.requestAnimationFrame(updateDockBounds);
+      });
+      var workspace = findWorkspaceNode();
+      if (workspace) workspaceObserver.observe(workspace);
+      workspaceObserver.observe(document.documentElement);
+    }
+
+    mutationObserver = new MutationObserver(function (records) {
+      var shouldUpdate = records.some(function (record) {
+        return record.type === "childList" ||
+          record.attributeName === "class" ||
+          record.attributeName === "style";
+      });
+      if (shouldUpdate) window.requestAnimationFrame(updateDockBounds);
+    });
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: false,
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
+
+    window.addEventListener("resize", updateDockBounds);
+    window.addEventListener("orientationchange", updateDockBounds);
+    window.addEventListener("beforeunload", function () {
+      if (workspaceObserver) workspaceObserver.disconnect();
+      if (mutationObserver) mutationObserver.disconnect();
+    }, { once: true });
   }
 
   var JigmaBricksInsertAdapter = {
@@ -228,7 +408,7 @@
       form.append("payload", JSON.stringify(payload));
       form.append("includeJsCode", options && options.includeJsCode ? "1" : "");
       form.append("pageStylesCss", options && options.pageStylesCss ? options.pageStylesCss : "");
-      form.append("schemaVersion", config.compatibilitySchemaVersion || "bricks-compatibility.v1");
+      form.append("schemaVersion", config.compatibilitySchemaVersion || SCHEMA_VERSION);
 
       return fetch(config.ajaxUrl, {
         body: form,
@@ -248,7 +428,6 @@
       });
     },
   };
-
   window.JigmaBricksInsertAdapter = JigmaBricksInsertAdapter;
 
   function runConversion() {
@@ -262,391 +441,929 @@
       js: state.js,
       projectPrefix: "jg",
       blockName: "section",
-      includeJavaScriptCode: state.includeJavaScriptCode,
+      includeJavaScriptCode: Boolean(state.js.trim()) && ui.includeJavaScript,
     });
 
     state.lastRun = result;
-    state.pageStylesDecision = result.pageLevelCss.ruleCount > 0 ? "" : "none";
+    if (result.pageLevelCss.ruleCount === 0) {
+      state.pageStylesDecision = "none";
+    } else if (ui.pageCssMode === "include") {
+      state.pageStylesDecision = "include";
+    } else if (ui.pageCssMode === "exclude") {
+      state.pageStylesDecision = "exclude";
+    } else {
+      state.pageStylesDecision = "";
+    }
     return result;
+  }
+
+  function scheduleLiveAnalysis() {
+    window.clearTimeout(liveAnalysisTimer);
+    if (!ui.liveAnalysis) return;
+    liveAnalysisTimer = window.setTimeout(function () {
+      try {
+        runConversion();
+        renderReviewDrawer();
+        updateStatus();
+      } catch (error) {
+        updateStatus(error.message || "Jigma validation failed.");
+      }
+    }, 450);
   }
 
   function minimalPayload(result) {
     return JSON.stringify(result.payload, null, 2);
   }
 
-  function mountPanel() {
-    var dock = el("section", "jigma-bricks-dock");
-    var header = el("header", "jigma-bricks-dock__header");
-    var brand = el("div", "jigma-bricks-brand");
-    var mark = el("span", "jigma-bricks-brand__mark", "J");
-    var wordmark = el("strong", "", "Jigma");
-    var target = el("span", "jigma-bricks-target", "Target: none");
-    var actions = el("div", "jigma-bricks-actions");
-    var run = el("button", "jigma-bricks-button", "Run");
-    var insert = el("button", "jigma-bricks-button jigma-bricks-button--primary", "Insert into Selected");
-    var copy = el("button", "jigma-bricks-button", "Copy Structure");
-    var settings = el("button", "jigma-bricks-icon-button", "Review");
-    var collapse = el("button", "jigma-bricks-icon-button", "Collapse");
-    var editors = el("div", "jigma-bricks-editors");
-    var tabs = el("div", "jigma-bricks-tabs");
-    var drawer = el("aside", "jigma-bricks-drawer");
-    var footer = el("footer", "jigma-bricks-footer");
-    var status = el("p", "jigma-bricks-status", "Select a container in Bricks before inserting.");
-    var save = el("button", "jigma-bricks-button", "Save Section");
-    var duplicate = el("button", "jigma-bricks-button", "Duplicate Section");
+  function formatSource(kind, value) {
+    var text = String(value || "").trim();
+    if (!text) return "";
+    if (kind === "css") {
+      return text.replace(/\s*{\s*/g, " {\n  ")
+        .replace(/;\s*/g, ";\n  ")
+        .replace(/\s*}\s*/g, "\n}\n\n")
+        .replace(/\n\s+\n/g, "\n")
+        .trim();
+    }
+    if (kind === "js") {
+      return text.replace(/;\s*/g, ";\n").replace(/\{\s*/g, "{\n  ").replace(/\}\s*/g, "\n}\n").trim();
+    }
+    return text.replace(/></g, ">\n<");
+  }
 
+  function splitCombinedSource(source) {
+    var text = String(source || "");
+    var css = [];
+    var js = [];
+    var html = text
+      .replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, function (_, body) {
+        css.push(body.trim());
+        return "";
+      })
+      .replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gi, function (_, body) {
+        js.push(body.trim());
+        return "";
+      })
+      .replace(/<!doctype[^>]*>/gi, "")
+      .replace(/<\/?(html|head|body)\b[^>]*>/gi, "")
+      .trim();
+    return { html: html, css: css.join("\n\n"), js: js.join("\n\n") };
+  }
+
+  function getVisibleEditorKinds() {
+    return ["html", "css", "js"].filter(function (kind) {
+      return ui.visibleEditors[kind] !== false;
+    });
+  }
+
+  function setDockState(nextState) {
+    ui.dockState = nextState;
+    persistUi();
+    syncDockState();
+  }
+
+  function syncDockState() {
+    nodes.dock.classList.toggle("is-collapsed", ui.dockState === "collapsed");
+    nodes.dock.classList.toggle("is-hidden", ui.dockState === "hidden");
+    nodes.launcher.hidden = ui.dockState !== "hidden";
+    nodes.collapse.setAttribute("aria-expanded", ui.dockState === "expanded" ? "true" : "false");
+    nodes.dock.style.setProperty("--jigma-dock-height", Math.max(180, Math.min(ui.dockHeight, Math.round(window.innerHeight * 0.65))) + "px");
+  }
+
+  function setActiveEditor(kind) {
+    ui.activeEditor = kind;
+    persistUi();
+    syncEditors();
+  }
+
+  function syncEditors() {
+    var visibleKinds = getVisibleEditorKinds();
+    if (visibleKinds.indexOf(ui.activeEditor) === -1) {
+      ui.activeEditor = visibleKinds[0] || "html";
+    }
+
+    ["html", "css", "js"].forEach(function (kind) {
+      var field = nodes.editors[kind].field;
+      var tab = nodes.editors[kind].tab;
+      nodes.editors[kind].textarea.value = state[kind];
+      field.hidden = ui.visibleEditors[kind] === false;
+      field.classList.toggle("is-active", ui.activeEditor === kind);
+      tab.hidden = ui.visibleEditors[kind] === false;
+      tab.classList.toggle("is-active", ui.activeEditor === kind);
+      tab.setAttribute("aria-selected", ui.activeEditor === kind ? "true" : "false");
+    });
+
+    nodes.editorsWrap.style.gridTemplateColumns = visibleKinds.map(function (kind) {
+      return "minmax(160px, " + Math.max(0.35, Number(ui.editorWidths[kind] || 1)) + "fr)";
+    }).join(" ");
+    renderGutters();
+  }
+
+  function renderGutters() {
+    nodes.gutters.innerHTML = "";
+    var visibleKinds = getVisibleEditorKinds();
+    if (visibleKinds.length < 2) return;
+    visibleKinds.slice(0, -1).forEach(function (kind, index) {
+      var gutter = el("button", "jigma-editor-gutter", "");
+      gutter.type = "button";
+      gutter.setAttribute("aria-label", "Resize " + kind.toUpperCase() + " editor");
+      gutter.dataset.before = kind;
+      gutter.dataset.after = visibleKinds[index + 1];
+      gutter.addEventListener("pointerdown", startEditorResize);
+      gutter.addEventListener("keydown", function (event) {
+        var delta = event.key === "ArrowLeft" ? -0.1 : event.key === "ArrowRight" ? 0.1 : 0;
+        if (!delta) return;
+        event.preventDefault();
+        ui.editorWidths[gutter.dataset.before] = Math.max(0.35, Number(ui.editorWidths[gutter.dataset.before] || 1) + delta);
+        ui.editorWidths[gutter.dataset.after] = Math.max(0.35, Number(ui.editorWidths[gutter.dataset.after] || 1) - delta);
+        if (ui.rememberEditorWidths) persistUi();
+        syncEditors();
+      });
+      nodes.gutters.appendChild(gutter);
+    });
+  }
+
+  function startEditorResize(event) {
+    event.preventDefault();
+    var before = event.currentTarget.dataset.before;
+    var after = event.currentTarget.dataset.after;
+    var startX = event.clientX;
+    var startBefore = Number(ui.editorWidths[before] || 1);
+    var startAfter = Number(ui.editorWidths[after] || 1);
+    function move(moveEvent) {
+      var delta = (moveEvent.clientX - startX) / 260;
+      ui.editorWidths[before] = Math.max(0.35, startBefore + delta);
+      ui.editorWidths[after] = Math.max(0.35, startAfter - delta);
+      syncEditors();
+    }
+    function stop() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      if (ui.rememberEditorWidths) persistUi();
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
+  function updateTarget() {
+    state.target = JigmaBricksInsertAdapter.inspect().selectedTarget;
+    nodes.target.textContent = "Target: " + state.target.shortLabel;
+    nodes.target.title = "Target: " + state.target.label;
+    nodes.target.classList.toggle("is-ready", Boolean(state.target.acceptsChildren));
+    updateStatus();
+  }
+
+  function warningCountByCode(pattern) {
+    if (!state.lastRun) return 0;
+    return (state.lastRun.diagnostics.warnings || []).filter(function (warning) {
+      return pattern.test(String(warning.code || warning.message || ""));
+    }).reduce(function (sum, warning) {
+      return sum + (warning.count || 1);
+    }, 0);
+  }
+
+  function statusText() {
+    if (!state.target || !state.target.id) {
+      state.statusKind = "blocked";
+      return "Blocked \u00b7 No selected target";
+    }
+    if (!state.target.exists || !state.target.acceptsChildren) {
+      state.statusKind = "blocked";
+      return "Blocked \u00b7 " + state.target.message;
+    }
+    if (!state.lastRun) {
+      state.statusKind = "ready";
+      return "Ready";
+    }
+    if (state.pageStylesDecision === "" || warningCountByCode(/signature|asset|unresolved|sanitize|sanit/i) > 0) {
+      state.statusKind = "review";
+      if (warningCountByCode(/svg\.signature/i) > 0) {
+        return "Needs review \u00b7 " + warningCountByCode(/svg\.signature/i) + " unsigned SVGs";
+      }
+      if (state.pageStylesDecision === "") return "Needs review \u00b7 Page-level CSS";
+      return "Needs review";
+    }
+    state.statusKind = "ready";
+    return "Ready \u00b7 " +
+      state.lastRun.diagnostics.elementCount + " elements \u00b7 " +
+      state.lastRun.diagnostics.classCount + " classes";
+  }
+
+  function updateStatus(message, kind) {
+    if (message) {
+      nodes.status.textContent = message;
+      state.statusKind = kind || state.statusKind || "ready";
+    } else {
+      nodes.status.textContent = statusText();
+    }
+    nodes.status.dataset.status = state.statusKind;
+    nodes.insert.disabled = !canInsert();
+    nodes.jsBadge.textContent = state.js.trim() ? "Review required" : "None";
+    nodes.jsBadge.dataset.status = state.js.trim() ? "review" : "idle";
+  }
+
+  function canInsert() {
+    var pageStylesReady = !state.lastRun ||
+      state.lastRun.pageLevelCss.ruleCount === 0 ||
+      state.pageStylesDecision === "include" ||
+      state.pageStylesDecision === "exclude";
+    return Boolean(
+      state.lastRun &&
+      state.target &&
+      state.target.exists &&
+      state.target.acceptsChildren &&
+      pageStylesReady
+    );
+  }
+
+  function renderReviewDrawer(errorData) {
+    nodes.drawer.innerHTML = "";
+    nodes.drawer.classList.toggle("is-open", state.drawerOpen);
+    nodes.status.setAttribute("aria-expanded", state.drawerOpen ? "true" : "false");
+    if (!state.drawerOpen) return;
+
+    var review = el("section", "jigma-review");
+    review.appendChild(el("h3", "", state.drawerMode === "saved" ? "Saved Sections" : "Review"));
+
+    if (state.drawerMode === "saved") {
+      renderSavedSections(review);
+      nodes.drawer.appendChild(review);
+      return;
+    }
+
+    if (!state.lastRun) {
+      review.appendChild(el("p", "", "Run Jigma to generate a Bricks Compatibility payload."));
+    } else {
+      review.appendChild(el("p", "", state.lastRun.diagnostics.elementCount + " elements, " + state.lastRun.diagnostics.classCount + " classes."));
+      if (state.pageStylesDecision === "") {
+        renderPageCssReview(review);
+      }
+      if (state.js.trim() && ui.includeJavaScript) {
+        review.appendChild(el("p", "jigma-review__item", "Unsigned JavaScript: Signature required after import."));
+      }
+      renderWarnings(review);
+    }
+
+    if (errorData && Array.isArray(errorData.conflicts)) {
+      errorData.conflicts.forEach(function (conflict) {
+        var item = el("div", "jigma-review__item");
+        item.appendChild(el("strong", "", "Class conflict: ." + (conflict.name || "class")));
+        item.appendChild(el("p", "", "This class already exists with different CSS."));
+        ["Use existing", "Rename imported", "Cancel"].forEach(function (label) {
+          var button = el("button", "jigma-button", label);
+          button.type = "button";
+          button.addEventListener("click", function () {
+            updateStatus("Resolve class conflicts in Bricks before inserting.", "blocked");
+          });
+          item.appendChild(button);
+        });
+        review.appendChild(item);
+      });
+    }
+
+    nodes.drawer.appendChild(review);
+  }
+
+  function renderPageCssReview(parent) {
+    var pageStyles = state.lastRun.pageLevelCss;
+    var groupText = pageStyles.groups.map(function (group) {
+      return group.count + " " + group.label;
+    }).join(", ");
+    var item = el("div", "jigma-review__item");
+    item.appendChild(el("strong", "", "Page-level CSS detected"));
+    item.appendChild(el("p", "", groupText || "Global CSS rules require review."));
+    var include = el("button", "jigma-button", "Include as Jigma Page Styles");
+    var exclude = el("button", "jigma-button", "Exclude");
+    var inspect = el("button", "jigma-button", "Review");
+    include.type = exclude.type = inspect.type = "button";
+    include.addEventListener("click", function () {
+      state.pageStylesDecision = "include";
+      renderReviewDrawer();
+      updateStatus();
+    });
+    exclude.addEventListener("click", function () {
+      state.pageStylesDecision = "exclude";
+      renderReviewDrawer();
+      updateStatus();
+    });
+    inspect.addEventListener("click", function () {
+      window.alert(pageStyles.css);
+    });
+    item.append(include, exclude, inspect);
+    parent.appendChild(item);
+  }
+
+  function renderWarnings(parent) {
+    var actionable = (state.lastRun.diagnostics.warnings || []).filter(function (warning) {
+      return /error|action|required|unresolved|asset|signature|sanitize|sanit|conflict/i.test(
+        String(warning.severity || "") + " " + String(warning.code || "") + " " + String(warning.message || "")
+      );
+    });
+    actionable.slice(0, 8).forEach(function (warning) {
+      parent.appendChild(el("p", "jigma-review__item", warning.title || warning.message || "Review required"));
+    });
+  }
+
+  function renderSavedSections(parent) {
+    var tools = el("div", "jigma-saved-tools");
+    var save = el("button", "jigma-button", "Save current");
+    var importJson = el("button", "jigma-button", "Import JSON");
+    save.type = importJson.type = "button";
+    save.addEventListener("click", function () {
+      saveCurrentSection();
+      renderReviewDrawer();
+      updateStatus("Section saved.", "ready");
+    });
+    importJson.addEventListener("click", importSectionJson);
+    tools.append(save, importJson);
+    parent.appendChild(tools);
+
+    readSavedSections().forEach(function (section) {
+      var row = el("article", "jigma-saved-row");
+      row.appendChild(el("strong", "", section.name || "Jigma Section"));
+      row.appendChild(el("span", "", section.updatedAt ? new Date(section.updatedAt).toLocaleString() : ""));
+      var load = el("button", "jigma-button", "Load");
+      var menu = el("button", "jigma-button", "\u2026");
+      load.type = menu.type = "button";
+      load.addEventListener("click", function () { loadSection(section); });
+      menu.addEventListener("click", function () { savedSectionMenu(section); });
+      row.append(load, menu);
+      parent.appendChild(row);
+    });
+  }
+
+  function savedSectionMenu(section) {
+    var action = window.prompt("Rename, Duplicate Section, Export JSON, or Delete?", "Rename");
+    var items = readSavedSections();
+    var index = items.findIndex(function (item) { return item.id === section.id; });
+    if (index < 0 || !action) return;
+    if (/rename/i.test(action)) {
+      var nextName = window.prompt("Section name", items[index].name || "Jigma Section");
+      if (nextName) items[index].name = nextName;
+    } else if (/duplicate/i.test(action)) {
+      items.unshift(Object.assign({}, items[index], {
+        id: "section-" + Date.now().toString(36),
+        name: (items[index].name || "Jigma Section") + " Copy",
+        updatedAt: new Date().toISOString(),
+      }));
+    } else if (/export/i.test(action)) {
+      navigator.clipboard.writeText(JSON.stringify(items[index], null, 2));
+    } else if (/delete/i.test(action)) {
+      items.splice(index, 1);
+    }
+    writeSavedSections(items);
+    renderReviewDrawer();
+  }
+
+  function importSectionJson() {
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json";
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      file.text().then(function (text) {
+        var parsed = safeJsonParse(text, null);
+        if (!parsed) throw new Error("Invalid section JSON.");
+        loadSection(parsed);
+        updateStatus("Section imported.", "ready");
+      }).catch(function (error) {
+        updateStatus(error.message || "Import failed.", "blocked");
+      });
+    });
+    input.click();
+  }
+
+  function doRun() {
+    try {
+      runConversion();
+      state.drawerOpen = state.pageStylesDecision === "" || (state.lastRun.diagnostics.warnings || []).length > 0;
+      state.drawerMode = "review";
+      renderReviewDrawer();
+      updateStatus();
+    } catch (error) {
+      updateStatus(error.message || "Jigma run failed.", "blocked");
+    }
+  }
+
+  function doCopy() {
+    try {
+      var result = state.lastRun || runConversion();
+      navigator.clipboard.writeText(minimalPayload(result)).then(function () {
+        updateStatus("Copied Bricks Compatibility payload.", "ready");
+      }).catch(function () {
+        updateStatus("Clipboard copy failed.", "blocked");
+        console.log("Jigma Bricks payload", result.payload);
+      });
+    } catch (error) {
+      updateStatus(error.message || "Copy failed.", "blocked");
+    }
+  }
+
+  function doInsert() {
+    if (!canInsert()) {
+      updateStatus();
+      return;
+    }
+    if (ui.confirmBeforeInsert && !window.confirm("Insert Jigma content into " + state.target.shortLabel + "?")) {
+      return;
+    }
+    var pageStylesCss = state.pageStylesDecision === "include" ? state.lastRun.pageLevelCss.css : "";
+    nodes.insert.disabled = true;
+    JigmaBricksInsertAdapter.insert(state.lastRun.payload, {
+      includeJsCode: Boolean(state.js.trim()) && ui.includeJavaScript,
+      pageStylesCss: pageStylesCss,
+    }).then(function (data) {
+      if (ui.clearAfterInsert) {
+        state.html = "";
+        state.css = "";
+        state.js = "";
+        state.lastRun = null;
+        persistWorkspace();
+        syncEditors();
+      }
+      var codeWarning = data.codeWarnings && data.codeWarnings.length ? " " + data.codeWarnings[0] : "";
+      updateStatus((data.message || "Inserted. Reload the Bricks builder to view saved content.") + codeWarning, "inserted");
+    }).catch(function (error) {
+      state.drawerOpen = true;
+      state.drawerMode = "review";
+      renderReviewDrawer(error.data || {});
+      updateStatus(error.message || "Insert failed.", "blocked");
+    }).finally(function () {
+      nodes.insert.disabled = !canInsert();
+    });
+  }
+
+  function openSettingsModal() {
+    openModal("Jigma Settings", renderSettingsModal);
+  }
+
+  function openQuickImportModal() {
+    openModal("Quick Import", function (body) {
+      var text = el("textarea", "jigma-modal-textarea");
+      text.placeholder = "Paste combined HTML, CSS and JavaScript";
+      var apply = el("button", "jigma-button jigma-button--primary", "Import");
+      apply.type = "button";
+      apply.addEventListener("click", function () {
+        var split = splitCombinedSource(text.value);
+        state.html = split.html;
+        state.css = split.css;
+        state.js = split.js;
+        state.lastRun = null;
+        persistWorkspace();
+        syncEditors();
+        closeModal();
+        updateStatus("Source imported.", "ready");
+      });
+      body.append(text, apply);
+    });
+  }
+
+  function openModal(title, renderBody) {
+    closeModal();
+    var overlay = el("div", "jigma-modal-layer");
+    var dialog = el("section", "jigma-modal");
+    var heading = el("h2", "", title);
+    var close = el("button", "jigma-icon-button", "Close");
+    var body = el("div", "jigma-modal-body");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "jigma-modal-title");
+    heading.id = "jigma-modal-title";
+    close.type = "button";
+    close.setAttribute("aria-label", "Close Jigma settings");
+    close.addEventListener("click", closeModal);
+    var head = el("header", "jigma-modal-head");
+    head.append(heading, close);
+    renderBody(body);
+    dialog.append(head, body);
+    overlay.appendChild(dialog);
+    nodes.root.appendChild(overlay);
+    state.modal = overlay;
+    var focusables = modalFocusables();
+    (focusables[0] || close).focus();
+  }
+
+  function modalFocusables() {
+    if (!state.modal) return [];
+    return Array.from(state.modal.querySelectorAll("button, input, select, textarea, [tabindex]:not([tabindex='-1'])"))
+      .filter(function (node) { return !node.disabled && node.offsetParent !== null; });
+  }
+
+  function closeModal() {
+    if (state.modal) {
+      state.modal.remove();
+      state.modal = null;
+      nodes.settings.focus();
+    }
+  }
+
+  function renderSettingsModal(body) {
+    body.append(
+      settingsSection("General", [
+        toggleRow("Live analysis", "Re-run Jigma validation as you type. This never inserts content automatically.", "liveAnalysis"),
+        toggleRow("Confirm before insertion", "", "confirmBeforeInsert"),
+        toggleRow("Restore last workspace", "", "restoreLastWorkspace"),
+        toggleRow("Clear after successful insertion", "", "clearAfterInsert"),
+      ]),
+      editorVisibilitySection(),
+      dockSettingsSection(),
+      exportSettingsSection(),
+      toolsSection()
+    );
+  }
+
+  function settingsSection(title, rows) {
+    var section = el("section", "jigma-settings-section");
+    section.appendChild(el("h3", "", title));
+    rows.forEach(function (row) { section.appendChild(row); });
+    return section;
+  }
+
+  function toggleRow(label, helper, key) {
+    var row = el("label", "jigma-setting-row");
+    var text = el("span", "jigma-setting-row__text");
+    text.appendChild(el("strong", "", label));
+    if (helper) text.appendChild(el("small", "", helper));
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(ui[key]);
+    input.addEventListener("change", function () {
+      ui[key] = input.checked;
+      persistUi();
+      if (key === "liveAnalysis") scheduleLiveAnalysis();
+    });
+    row.append(text, input);
+    return row;
+  }
+
+  function editorVisibilitySection() {
+    var section = settingsSection("Editor visibility", []);
+    ["html", "css", "js"].forEach(function (kind) {
+      var row = el("label", "jigma-setting-row");
+      row.appendChild(el("strong", "", kind === "js" ? "JavaScript" : kind.toUpperCase()));
+      var input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = ui.visibleEditors[kind] !== false;
+      input.addEventListener("change", function () {
+        var next = Object.assign({}, ui.visibleEditors);
+        next[kind] = input.checked;
+        ui.visibleEditors = normalizeVisibility(next);
+        persistUi();
+        syncEditors();
+        renderSettingsModalRefresh();
+      });
+      row.appendChild(input);
+      section.appendChild(row);
+    });
+    return section;
+  }
+
+  function renderSettingsModalRefresh() {
+    if (!state.modal) return;
+    var body = state.modal.querySelector(".jigma-modal-body");
+    if (!body) return;
+    body.innerHTML = "";
+    renderSettingsModal(body);
+  }
+
+  function dockSettingsSection() {
+    var section = settingsSection("Dock", []);
+    var height = el("label", "jigma-setting-row");
+    height.appendChild(el("strong", "", "Dock height"));
+    var input = document.createElement("input");
+    input.type = "range";
+    input.min = "180";
+    input.max = String(Math.round(window.innerHeight * 0.65));
+    input.value = String(ui.dockHeight);
+    input.addEventListener("input", function () {
+      ui.dockHeight = Number(input.value);
+      persistUi();
+      syncDockState();
+    });
+    height.appendChild(input);
+    section.appendChild(height);
+    var resetWidths = el("button", "jigma-button", "Reset panel sizes");
+    var restoreLayout = el("button", "jigma-button", "Restore default layout");
+    var hideDock = el("button", "jigma-button", "Hide dock");
+    resetWidths.type = restoreLayout.type = hideDock.type = "button";
+    resetWidths.addEventListener("click", function () {
+      ui.editorWidths = Object.assign({}, defaultUi.editorWidths);
+      persistUi();
+      syncEditors();
+    });
+    restoreLayout.addEventListener("click", function () {
+      ui = mergeUi(defaultUi);
+      persistUi();
+      syncDockState();
+      syncEditors();
+      renderSettingsModalRefresh();
+    });
+    hideDock.addEventListener("click", function () {
+      closeModal();
+      setDockState("hidden");
+    });
+    section.append(toggleRow("Open expanded on builder load", "", "openExpandedOnLoad"));
+    section.append(toggleRow("Remember editor widths", "", "rememberEditorWidths"));
+    section.append(resetWidths, restoreLayout, hideDock);
+    return section;
+  }
+
+  function exportSettingsSection() {
+    var section = settingsSection("Export", []);
+    var includeJs = toggleRow("Include JavaScript", "Creates one disabled Code element when JavaScript exists.", "includeJavaScript");
+    includeJs.querySelector("input").disabled = !state.js.trim();
+    section.appendChild(includeJs);
+    section.appendChild(selectRow("Include page-level CSS", "pageCssMode", [
+      ["ask", "Ask each time"],
+      ["include", "Always include"],
+      ["exclude", "Always exclude"],
+    ]));
+    section.appendChild(selectRow("Class conflict behaviour", "classConflictMode", [
+      ["ask", "Ask"],
+      ["reuse", "Reuse matching"],
+      ["cancel", "Cancel on conflict"],
+    ]));
+    return section;
+  }
+
+  function selectRow(label, key, options) {
+    var row = el("label", "jigma-setting-row");
+    row.appendChild(el("strong", "", label));
+    var select = document.createElement("select");
+    options.forEach(function (option) {
+      var node = document.createElement("option");
+      node.value = option[0];
+      node.textContent = option[1];
+      select.appendChild(node);
+    });
+    select.value = ui[key];
+    select.addEventListener("change", function () {
+      ui[key] = select.value;
+      persistUi();
+    });
+    row.appendChild(select);
+    return row;
+  }
+
+  function toolsSection() {
+    var section = settingsSection("Tools", []);
+    var quickImport = el("button", "jigma-button", "Quick Import");
+    var saved = el("button", "jigma-button", "Saved Sections");
+    var reset = el("button", "jigma-button", "Reset Jigma");
+    quickImport.type = saved.type = reset.type = "button";
+    quickImport.addEventListener("click", openQuickImportModal);
+    saved.addEventListener("click", function () {
+      closeModal();
+      state.drawerOpen = true;
+      state.drawerMode = "saved";
+      renderReviewDrawer();
+    });
+    reset.addEventListener("click", function () {
+      localStorage.removeItem(UI_KEY);
+      ui = mergeUi(defaultUi);
+      persistUi();
+      syncDockState();
+      syncEditors();
+      renderSettingsModalRefresh();
+    });
+    section.append(quickImport, saved, reset);
+    return section;
+  }
+
+  function makeEditor(kind, label) {
+    var field = el("section", "jigma-editor jigma-editor--" + kind);
+    var header = el("header", "jigma-editor__head");
+    var title = el("strong", "", label);
+    var badge = el("span", "jigma-editor__badge", kind === "js" ? "None" : "Ready");
+    var actions = el("div", "jigma-editor__actions");
+    var format = el("button", "jigma-mini-button", "Format");
+    var copy = el("button", "jigma-mini-button", "Copy");
+    var clear = el("button", "jigma-mini-button", "Clear");
+    var textarea = el("textarea", "jigma-editor__textarea");
+    format.type = copy.type = clear.type = "button";
+    textarea.spellcheck = false;
+    textarea.value = state[kind];
+    format.addEventListener("click", function () {
+      state[kind] = formatSource(kind, state[kind]);
+      state.lastRun = null;
+      persistWorkspace();
+      syncEditors();
+      scheduleLiveAnalysis();
+    });
+    copy.addEventListener("click", function () {
+      navigator.clipboard.writeText(state[kind] || "");
+    });
+    clear.addEventListener("click", function () {
+      state[kind] = "";
+      state.lastRun = null;
+      persistWorkspace();
+      syncEditors();
+      scheduleLiveAnalysis();
+      updateStatus();
+    });
+    textarea.addEventListener("input", function () {
+      state[kind] = textarea.value;
+      state.lastRun = null;
+      persistWorkspace();
+      scheduleLiveAnalysis();
+      updateStatus();
+    });
+    actions.append(format, copy, clear);
+    header.append(title, badge, actions);
+    field.append(header, textarea);
+    return { field: field, textarea: textarea, badge: badge };
+  }
+
+  function mountPanel() {
+    var root = el("div", "jigma-root");
+    root.id = ROOT_ID;
+    var launcher = el("button", "jigma-launcher", "Jigma");
+    launcher.type = "button";
+    launcher.hidden = true;
+    launcher.addEventListener("click", function () { setDockState("expanded"); });
+
+    var dock = el("section", "jigma-dock");
+    dock.setAttribute("aria-label", "Jigma Bricks dock");
+    var workspaceNotice = el("p", "jigma-workspace-warning", "Jigma could not detect the Bricks workspace. Using safe bottom fallback.");
+    workspaceNotice.hidden = true;
+
+    var toolbar = el("header", "jigma-toolbar");
+    var brand = el("div", "jigma-brand");
+    var mark = el("span", "jigma-brand__mark", "J");
+    var wordmark = el("strong", "", "Jigma");
+    var target = el("span", "jigma-target", "Target: No target selected");
+    var status = el("button", "jigma-status", "Blocked \u00b7 No selected target");
+    var actions = el("div", "jigma-actions");
+    var run = el("button", "jigma-button", config.runPreviewLabel || "Run");
+    var insert = el("button", "jigma-button jigma-button--primary", config.insertLabel || "Insert into Selected");
+    var copy = el("button", "jigma-button", config.copyLabel || "Copy Structure");
+    var save = el("button", "jigma-button", "Save Section");
+    var settings = el("button", "jigma-icon-button", "Settings");
+    var collapse = el("button", "jigma-icon-button", "Collapse");
+    var tabs = el("div", "jigma-tabs");
+    var editorsWrap = el("div", "jigma-editors");
+    var gutters = el("div", "jigma-editor-gutters");
+    var drawer = el("aside", "jigma-drawer");
+    var resize = el("button", "jigma-dock-resize", "");
+
+    status.type = run.type = insert.type = copy.type = save.type = settings.type = collapse.type = resize.type = "button";
     run.title = "Run - Shift + Enter";
     insert.title = "Insert into Selected - Cmd/Ctrl + Shift + Enter";
     copy.title = "Copy Structure - Cmd/Ctrl + Option/Alt + C";
     save.title = "Save Section - Cmd/Ctrl + Option/Alt + S";
-    duplicate.title = "Duplicate Section - Cmd/Ctrl + Option/Alt + D";
-    settings.title = "Open review drawer";
+    settings.title = "Settings";
     collapse.title = "Collapse dock - Escape";
+    resize.setAttribute("aria-label", "Resize Jigma dock");
+    collapse.setAttribute("aria-expanded", "true");
+    status.setAttribute("aria-label", "Open Jigma review");
 
     brand.append(mark, wordmark);
-    actions.append(run, insert, copy, settings, collapse);
-    header.append(brand, target, actions);
+    actions.append(run, insert, copy, save, status, settings, collapse);
+    toolbar.append(brand, target, actions);
 
-    var editorFields = {};
-    ["html", "css", "js"].forEach(function (kind) {
-      var label = kind === "js" ? "JavaScript" : kind.toUpperCase();
-      var tab = el("button", "jigma-bricks-tab", label);
-      var field = el("label", "jigma-bricks-field jigma-bricks-field--" + kind);
-      var fieldLabel = el("span", "", label);
-      var textarea = el("textarea", "jigma-bricks-editor");
-      textarea.spellcheck = false;
-      textarea.value = state[kind];
-      textarea.addEventListener("input", function () {
-        state[kind] = textarea.value;
-        state.lastRun = null;
-        updateStatus();
-      });
-      tab.addEventListener("click", function () {
-        state.activeEditor = kind;
-        syncEditors();
-      });
-      field.append(fieldLabel, textarea);
+    nodes = {
+      root: root,
+      dock: dock,
+      launcher: launcher,
+      workspaceNotice: workspaceNotice,
+      target: target,
+      status: status,
+      run: run,
+      insert: insert,
+      copy: copy,
+      save: save,
+      settings: settings,
+      collapse: collapse,
+      tabs: tabs,
+      editorsWrap: editorsWrap,
+      gutters: gutters,
+      drawer: drawer,
+      jsBadge: null,
+      editors: {},
+    };
+
+    [
+      ["html", "HTML"],
+      ["css", "CSS"],
+      ["js", "JavaScript"],
+    ].forEach(function (entry) {
+      var kind = entry[0];
+      var label = entry[1];
+      var tab = el("button", "jigma-tab", label);
+      tab.type = "button";
+      tab.setAttribute("role", "tab");
+      tab.addEventListener("click", function () { setActiveEditor(kind); });
+      var editor = makeEditor(kind, label);
+      nodes.editors[kind] = Object.assign({ tab: tab }, editor);
       tabs.appendChild(tab);
-      editors.appendChild(field);
-      editorFields[kind] = { tab: tab, field: field, textarea: textarea };
+      editorsWrap.appendChild(editor.field);
+      if (kind === "js") nodes.jsBadge = editor.badge;
     });
 
-    footer.append(status, save, duplicate);
-    dock.append(header, tabs, editors, drawer, footer);
-    document.body.appendChild(dock);
-
-    function syncEditors() {
-      Object.keys(editorFields).forEach(function (kind) {
-        editorFields[kind].textarea.value = state[kind];
-        editorFields[kind].tab.classList.toggle("is-active", state.activeEditor === kind);
-        editorFields[kind].field.classList.toggle("is-active", state.activeEditor === kind);
-      });
-    }
-
-    function renderDrawer(errorData) {
-      drawer.innerHTML = "";
-      drawer.classList.toggle("is-open", state.drawerOpen);
-
-      var review = el("section", "jigma-bricks-review");
-      review.appendChild(el("h3", "", "Review"));
-
-      if (state.lastRun) {
-        var diagnostics = state.lastRun.diagnostics;
-        var pageStyles = state.lastRun.pageLevelCss;
-        review.appendChild(el("p", "", diagnostics.elementCount + " elements, " + diagnostics.classCount + " classes."));
-        if (pageStyles.ruleCount > 0) {
-          var groupText = pageStyles.groups.map(function (group) {
-            return group.count + " " + group.label;
-          }).join(", ");
-          review.appendChild(el("p", "jigma-bricks-review__item", "Page-level CSS detected: " + groupText + "."));
-          var include = el("button", "jigma-bricks-button", "Include as Jigma Page Styles");
-          var exclude = el("button", "jigma-bricks-button", "Exclude page styles");
-          include.addEventListener("click", function () {
-            state.pageStylesDecision = "include";
-            updateStatus();
-          });
-          exclude.addEventListener("click", function () {
-            state.pageStylesDecision = "exclude";
-            updateStatus();
-          });
-          review.append(include, exclude);
-        }
-        if (state.js.trim()) {
-          var jsToggle = el("label", "jigma-bricks-check");
-          var input = document.createElement("input");
-          input.type = "checkbox";
-          input.checked = state.includeJavaScriptCode;
-          input.addEventListener("change", function () {
-            state.includeJavaScriptCode = input.checked;
-            state.lastRun = null;
-            updateStatus();
-          });
-          jsToggle.append(input, el("span", "", "Include JavaScript as disabled Code element"));
-          review.appendChild(jsToggle);
-        }
-      } else {
-        review.appendChild(el("p", "", "Run Jigma to generate a Bricks Compatibility payload."));
-      }
-
-      if (errorData && Array.isArray(errorData.conflicts)) {
-        errorData.conflicts.forEach(function (conflict) {
-          review.appendChild(el("p", "jigma-bricks-review__item", "Class conflict: " + (conflict.name || "class") + ". Resolve it in Bricks or cancel insertion."));
-        });
-      }
-
-      var saved = el("section", "jigma-bricks-saved");
-      saved.appendChild(el("h3", "", "Saved Sections"));
-      var saveCurrent = el("button", "jigma-bricks-button", "Save current");
-      var importJson = el("button", "jigma-bricks-button", "Import JSON");
-      saveCurrent.addEventListener("click", function () {
-        saveCurrentSection();
-        renderDrawer();
-        updateStatus("Section saved.");
-      });
-      importJson.addEventListener("click", function () {
-        var input = document.createElement("input");
-        input.type = "file";
-        input.accept = "application/json";
-        input.addEventListener("change", function () {
-          var file = input.files && input.files[0];
-          if (!file) return;
-          file.text().then(function (text) {
-            var parsed = safeJsonParse(text, null);
-            if (!parsed) throw new Error("Invalid section JSON.");
-            loadSection(parsed);
-            syncEditors();
-            renderDrawer();
-            updateStatus("Section imported.");
-          }).catch(function (error) {
-            updateStatus(error.message || "Import failed.");
-          });
-        });
-        input.click();
-      });
-      saved.append(saveCurrent, importJson);
-
-      readSavedSections().forEach(function (section) {
-        var row = el("article", "jigma-bricks-saved__row");
-        var name = el("strong", "", section.name || "Jigma Section");
-        var date = el("span", "", section.updatedAt ? new Date(section.updatedAt).toLocaleString() : "");
-        var load = el("button", "jigma-bricks-button", "Load");
-        var menu = el("button", "jigma-bricks-button", "Menu");
-        load.addEventListener("click", function () {
-          loadSection(section);
-          syncEditors();
-          updateStatus("Section loaded.");
-        });
-        menu.addEventListener("click", function () {
-          var action = window.prompt("Rename, Duplicate, Export JSON, or Delete?", "Rename");
-          var items = readSavedSections();
-          var index = items.findIndex(function (item) { return item.id === section.id; });
-          if (index < 0 || !action) return;
-          if (/rename/i.test(action)) {
-            var nextName = window.prompt("Section name", items[index].name || "Jigma Section");
-            if (nextName) items[index].name = nextName;
-          } else if (/duplicate/i.test(action)) {
-            items.unshift(Object.assign({}, items[index], {
-              id: "section-" + Date.now().toString(36),
-              name: (items[index].name || "Jigma Section") + " Copy",
-              updatedAt: new Date().toISOString(),
-            }));
-          } else if (/export/i.test(action)) {
-            navigator.clipboard.writeText(JSON.stringify(items[index], null, 2));
-          } else if (/delete/i.test(action)) {
-            items.splice(index, 1);
-          }
-          writeSavedSections(items);
-          renderDrawer();
-        });
-        row.append(name, date, load, menu);
-        saved.appendChild(row);
-      });
-
-      drawer.append(review, saved);
-    }
-
-    function canInsert() {
-      var pageStylesReady = !state.lastRun ||
-        state.lastRun.pageLevelCss.ruleCount === 0 ||
-        state.pageStylesDecision === "include" ||
-        state.pageStylesDecision === "exclude";
-      return Boolean(
-        state.lastRun &&
-        state.target &&
-        state.target.exists &&
-        state.target.acceptsChildren &&
-        pageStylesReady
-      );
-    }
-
-    function updateTarget() {
-      state.target = JigmaBricksInsertAdapter.inspect().selectedTarget;
-      target.textContent = "Target: " + state.target.label;
-      target.classList.toggle("is-ready", Boolean(state.target.acceptsChildren));
-      updateStatus();
-    }
-
-    function updateStatus(message) {
-      if (message) {
-        status.textContent = message;
-      } else if (!state.target || !state.target.id) {
-        status.textContent = "Select a container in Bricks before inserting.";
-      } else if (!state.target.exists || !state.target.acceptsChildren) {
-        status.textContent = state.target.message;
-      } else if (!state.lastRun) {
-        status.textContent = "Ready to run.";
-      } else if (state.lastRun.pageLevelCss.ruleCount > 0 && !state.pageStylesDecision) {
-        status.textContent = "Page-level CSS review required before insertion.";
-      } else {
-        status.textContent = "Ready to insert: " +
-          state.lastRun.diagnostics.elementCount + " elements, " +
-          state.lastRun.diagnostics.classCount + " classes, " +
-          state.lastRun.pageLevelCss.ruleCount + " page-level CSS review, " +
-          state.lastRun.diagnostics.unsignedJavaScriptCount + " unsigned JavaScript element.";
-      }
-      insert.disabled = !canInsert();
-    }
-
-    function doRun() {
-      try {
-        var result = runConversion();
-        state.drawerOpen = result.pageLevelCss.ruleCount > 0 || result.diagnostics.warnings.length > 0;
-        renderDrawer();
-        updateStatus();
-      } catch (error) {
-        updateStatus(error.message || "Jigma run failed.");
-      }
-    }
-
-    function doCopy() {
-      try {
-        var result = state.lastRun || runConversion();
-        navigator.clipboard.writeText(minimalPayload(result)).then(function () {
-          updateStatus("Bricks Compatibility payload copied.");
-        }).catch(function () {
-          updateStatus("Clipboard copy failed.");
-          console.log("Jigma Bricks payload", result.payload);
-        });
-      } catch (error) {
-        updateStatus(error.message || "Copy failed.");
-      }
-    }
-
-    function doInsert() {
-      if (!canInsert()) {
-        updateStatus();
-        return;
-      }
-      var pageStylesCss = state.pageStylesDecision === "include"
-        ? state.lastRun.pageLevelCss.css
-        : "";
-      insert.disabled = true;
-      JigmaBricksInsertAdapter.insert(state.lastRun.payload, {
-        includeJsCode: state.includeJavaScriptCode,
-        pageStylesCss: pageStylesCss,
-      }).then(function (data) {
-        var codeWarning = data.codeWarnings && data.codeWarnings.length ? " " + data.codeWarnings[0] : "";
-        updateStatus((data.message || "Inserted into selected target.") + codeWarning);
-      }).catch(function (error) {
-        state.drawerOpen = true;
-        renderDrawer(error.data || {});
-        updateStatus(error.message || "Insert failed.");
-      }).finally(function () {
-        insert.disabled = !canInsert();
-      });
-    }
+    dock.append(resize, toolbar, workspaceNotice, tabs, editorsWrap, gutters, drawer);
+    root.append(dock, launcher);
+    document.body.appendChild(root);
 
     run.addEventListener("click", doRun);
     insert.addEventListener("click", doInsert);
     copy.addEventListener("click", doCopy);
-    settings.addEventListener("click", function () {
-      state.drawerOpen = !state.drawerOpen;
-      renderDrawer();
-    });
-    collapse.addEventListener("click", function () {
-      dock.classList.toggle("is-collapsed");
-      localStorage.setItem(dockOpenKey, dock.classList.contains("is-collapsed") ? "0" : "1");
-    });
     save.addEventListener("click", function () {
       saveCurrentSection();
-      renderDrawer();
-      updateStatus("Section saved.");
+      state.drawerOpen = true;
+      state.drawerMode = "saved";
+      renderReviewDrawer();
+      updateStatus("Section saved.", "ready");
     });
-    duplicate.addEventListener("click", function () {
-      duplicateCurrentSection();
-      renderDrawer();
-      updateStatus("Section duplicated.");
+    status.addEventListener("click", function () {
+      state.drawerOpen = !state.drawerOpen;
+      state.drawerMode = "review";
+      renderReviewDrawer();
     });
-
-    dock.addEventListener("keydown", function (event) {
-      var modifier = event.metaKey || event.ctrlKey;
-      var alt = event.altKey;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        if (state.drawerOpen) {
-          state.drawerOpen = false;
-          renderDrawer();
-        } else {
-          dock.classList.add("is-collapsed");
-        }
-      } else if (event.key === "Enter" && event.shiftKey && !modifier) {
-        event.preventDefault();
-        doRun();
-      } else if (event.key === "Enter" && event.shiftKey && modifier) {
-        event.preventDefault();
-        doInsert();
-      } else if (event.key.toLowerCase() === "c" && modifier && alt) {
-        event.preventDefault();
-        doCopy();
-      } else if (event.key.toLowerCase() === "s" && modifier && alt) {
-        event.preventDefault();
-        saveCurrentSection();
-        renderDrawer();
-        updateStatus("Section saved.");
-      } else if (event.key.toLowerCase() === "d" && modifier && alt) {
-        event.preventDefault();
-        duplicateCurrentSection();
-        renderDrawer();
-        updateStatus("Section duplicated.");
-      }
+    settings.addEventListener("click", openSettingsModal);
+    collapse.addEventListener("click", function () {
+      setDockState(ui.dockState === "collapsed" ? "expanded" : "collapsed");
     });
-
-    var savedHeight = Number(localStorage.getItem(dockHeightKey) || 0);
-    if (savedHeight >= 260 && savedHeight <= 720) {
-      dock.style.setProperty("--jigma-dock-height", savedHeight + "px");
-    }
-    if (localStorage.getItem(dockOpenKey) === "0") {
-      dock.classList.add("is-collapsed");
-    }
-
-    var resizeHandle = el("div", "jigma-bricks-resize");
-    dock.appendChild(resizeHandle);
-    resizeHandle.addEventListener("pointerdown", function (event) {
+    resize.addEventListener("pointerdown", startDockResize);
+    resize.addEventListener("keydown", function (event) {
+      var delta = event.key === "ArrowUp" ? 12 : event.key === "ArrowDown" ? -12 : 0;
+      if (!delta) return;
       event.preventDefault();
-      var startY = event.clientY;
-      var startHeight = dock.getBoundingClientRect().height;
-      function move(moveEvent) {
-        var nextHeight = Math.min(720, Math.max(260, startHeight + startY - moveEvent.clientY));
-        dock.style.setProperty("--jigma-dock-height", nextHeight + "px");
-        localStorage.setItem(dockHeightKey, String(Math.round(nextHeight)));
-      }
-      function stop() {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", stop);
-      }
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", stop);
+      ui.dockHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.65), ui.dockHeight + delta));
+      persistUi();
+      syncDockState();
     });
 
+    root.addEventListener("keydown", handleScopedShortcuts);
     document.addEventListener("click", function () {
       window.setTimeout(updateTarget, 60);
     }, true);
     window.addEventListener("message", updateTarget);
-    window.setInterval(updateTarget, 1000);
+    window.setInterval(updateTarget, 1200);
 
+    syncDockState();
     syncEditors();
-    renderDrawer();
+    renderReviewDrawer();
+    observeWorkspace();
+    updateDockBounds();
     updateTarget();
+  }
+
+  function startDockResize(event) {
+    event.preventDefault();
+    var startY = event.clientY;
+    var startHeight = nodes.dock.getBoundingClientRect().height;
+    function move(moveEvent) {
+      ui.dockHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.65), startHeight + startY - moveEvent.clientY));
+      syncDockState();
+    }
+    function stop() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      persistUi();
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
+  function handleScopedShortcuts(event) {
+    var modifier = event.metaKey || event.ctrlKey;
+    var alt = event.altKey;
+    if (state.modal && event.key === "Tab") {
+      var focusables = modalFocusables();
+      if (focusables.length > 0) {
+        var first = focusables[0];
+        var last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (state.modal) closeModal();
+      else if (state.drawerOpen) {
+        state.drawerOpen = false;
+        renderReviewDrawer();
+      } else setDockState("collapsed");
+    } else if (event.key === "Enter" && event.shiftKey && !modifier) {
+      event.preventDefault();
+      doRun();
+    } else if (event.key === "Enter" && event.shiftKey && modifier) {
+      event.preventDefault();
+      doInsert();
+    } else if (event.key.toLowerCase() === "c" && modifier && alt) {
+      event.preventDefault();
+      doCopy();
+    } else if (event.key.toLowerCase() === "s" && modifier && alt) {
+      event.preventDefault();
+      saveCurrentSection();
+      updateStatus("Section saved.", "ready");
+    }
   }
 
   if (document.readyState === "loading") {

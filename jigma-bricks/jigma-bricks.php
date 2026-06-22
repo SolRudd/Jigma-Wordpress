@@ -3,7 +3,7 @@
  * Plugin Name: Jigma Bricks
  * Plugin URI: https://jigma.local
  * Description: Focused Jigma beta dock for converting HTML, CSS, and optional JavaScript into Bricks Builder structures.
- * Version: 0.2.0-beta
+ * Version: 0.2.1-beta
  * Author: Jigma
  * Text Domain: jigma-bricks
  * Requires at least: 6.4
@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JIGMA_BRICKS_VERSION', '0.2.0-beta' );
+define( 'JIGMA_BRICKS_VERSION', '0.2.1-beta' );
 define( 'JIGMA_BRICKS_TARGET_VERSION', '2.3.7' );
 define( 'JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION', 'bricks-compatibility.v1' );
 define( 'JIGMA_BRICKS_PLUGIN_FILE', __FILE__ );

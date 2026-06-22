@@ -1,5 +1,14 @@
 # Changelog
 
+## Jigma Bricks dock and settings beta - 2026-06-22
+
+- Bumped the WordPress plugin beta to `0.2.1-beta`.
+- Reworked the plugin panel into one scoped `#jigma-bricks-root` bottom dock that detects the Bricks workspace bounds and falls back safely when the canvas cannot be identified.
+- Added persisted expanded, collapsed, and hidden dock states, dock height resizing, editor width resizing, a hidden launcher, and compact selected-target/status feedback.
+- Added a focused settings modal with General, Editor visibility, Dock, Export, and Tools sections, plus Quick Import and Saved Sections access.
+- Kept insertion explicit: Run performs analysis only, Insert requires a selected nestable Bricks target, and page-level CSS/JavaScript remain review-controlled.
+- Scoped plugin CSS to the Jigma root and removed global UI selectors so the dock does not style Bricks, WordPress, or builder dialogs.
+
 ## Jigma selected-target Bricks plugin beta - 2026-06-22
 
 - Bumped the WordPress plugin beta to `0.2.0-beta`.

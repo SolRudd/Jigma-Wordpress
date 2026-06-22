@@ -6,7 +6,7 @@ Beta WordPress plugin for running Jigma inside a Bricks Builder editing context.
 
 - Detects Bricks Builder by theme, constants, or loaded Bricks classes.
 - Loads assets only for likely Bricks builder/admin requests.
-- Adds a compact bottom Jigma dock with HTML, CSS, and JavaScript editors.
+- Adds one scoped bottom Jigma dock inside the Bricks workspace with HTML, CSS, and JavaScript editors.
 - Uses the bundled shared Jigma Core conversion engine.
 - Generates a Bricks copied-elements payload and copies it to the clipboard.
 - Inserts generated elements into the selected Bricks element only.
@@ -14,6 +14,30 @@ Beta WordPress plugin for running Jigma inside a Bricks Builder editing context.
 - Assigns generated class IDs to elements through `_cssGlobalClasses`.
 - Preserves class-owned custom CSS from the shared Bricks Compatibility payload.
 - Adds JavaScript only when enabled, as one disabled Code element for review.
+
+## Installation
+
+1. In WordPress admin, go to Plugins > Add New > Upload Plugin.
+2. Upload `jigma-bricks.zip`.
+3. Activate Jigma Bricks.
+4. Open a page or template in Bricks Builder.
+5. Select a nestable Bricks element, such as a Section, Container, Div, Block, or Accordion item.
+6. Use the Jigma dock at the bottom of the builder workspace.
+
+If the dock does not appear, confirm Bricks is active and reload the builder URL. Assets are intentionally enqueued only in detected Bricks builder/admin contexts.
+
+## Dock UI beta
+
+- The dock mounts once under `#jigma-bricks-root` and scopes all plugin styles under that root.
+- Jigma detects the central Bricks workspace bounds and docks to that area so side panels, top bars, and dialogs are not intentionally covered.
+- If the workspace cannot be detected, Jigma shows a fallback warning and uses a safe bottom dock.
+- Dock state persists locally as expanded, collapsed, or hidden. Hidden mode shows a small launcher.
+- Default dock height is 320px and can be resized between 180px and 65vh.
+- Editors can be shown or hidden from Settings. Wide screens show active editors side by side; narrow screens use editor tabs.
+- Run performs analysis only. It does not insert, reload, or modify the Bricks page.
+- Insert into Selected is the only native insertion action.
+- Copy Bricks Structure remains available for manual paste testing.
+- Saved Sections and the last editor workspace are stored only in browser local storage.
 
 ## Native insertion beta
 
@@ -33,6 +57,17 @@ Jigma never silently inserts component structure at the page root. If no selecte
 Existing Bricks classes are reused only when the same class name has identical settings. A same-name class with different settings returns a conflict and no content is inserted.
 
 This beta does not mutate Bricks' live canvas JavaScript state. After insertion, reload the Bricks builder to verify the saved page content.
+
+## Manual test flow
+
+1. Open Bricks Builder and select a nestable target element.
+2. Paste HTML, CSS, and optional JavaScript into the Jigma dock.
+3. Click Run Preview.
+4. Review the status drawer for page-level CSS, unsigned SVG/code, dependencies, or conflicts.
+5. Click Copy Bricks Structure to inspect the exact shared compatibility payload if needed.
+6. Click Insert into Selected.
+7. Reload the Bricks builder when Jigma reports success.
+8. Confirm generated labels, native classes, class CSS, links, attributes, SVG/code review state, save, and frontend reload behavior.
 
 ## What it does not do yet
 
