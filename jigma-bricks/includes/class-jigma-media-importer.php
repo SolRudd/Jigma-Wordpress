@@ -24,7 +24,7 @@ class Jigma_Media_Importer {
 
 		return new WP_Error(
 			'jigma_asset_import_not_enabled',
-			__( 'Jigma media importing is not enabled in this proof of concept.', 'jigma-bricks' ),
+			__( 'Jigma media importing is not enabled in this beta.', 'jigma-bricks' ),
 			array(
 				'url'       => esc_url_raw( $url ),
 				'timeout'   => self::REQUEST_TIMEOUT,

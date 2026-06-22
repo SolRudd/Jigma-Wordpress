@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Jigma Bricks
  * Plugin URI: https://jigma.local
- * Description: Proof-of-concept Jigma panel for copying Bricks Builder structures from pasted HTML, CSS, and optional JavaScript.
+ * Description: Focused Jigma beta dock for converting HTML, CSS, and optional JavaScript into Bricks Builder structures.
  * Version: 0.2.0-beta
  * Author: Jigma
  * Text Domain: jigma-bricks
@@ -25,7 +25,7 @@ define( 'JIGMA_BRICKS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
  * Detects Bricks without requiring one specific implementation detail.
  *
  * Bricks is commonly active as a theme, and builder internals may not be loaded
- * on every admin request. Keep this broad and conservative for the POC.
+ * on every admin request. Keep this broad and conservative for the beta.
  */
 function jigma_bricks_is_bricks_active(): bool {
 	if (
@@ -152,7 +152,7 @@ function jigma_bricks_enqueue_assets(): void {
 			'compatibilitySchemaVersion' => JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION,
 			'sourceUrl'            => 'jigma.local',
 			'version'              => JIGMA_BRICKS_VERSION,
-			'insertLabel'          => __( 'Insert Into Page', 'jigma-bricks' ),
+			'insertLabel'          => __( 'Insert into Selected', 'jigma-bricks' ),
 			'copyLabel'            => __( 'Copy Bricks Structure', 'jigma-bricks' ),
 			'runPreviewLabel'      => __( 'Run Preview', 'jigma-bricks' ),
 			'panelTitle'           => __( 'Jigma', 'jigma-bricks' ),

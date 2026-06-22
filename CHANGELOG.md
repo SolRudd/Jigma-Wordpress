@@ -4,19 +4,19 @@
 
 - Bumped the WordPress plugin beta to `0.2.0-beta`.
 - Added a bundled Jigma Core browser asset for the plugin and removed the plugin panel's duplicate browser conversion implementation.
-- Replaced the floating POC panel with a compact resizable Bricks dock focused on HTML, CSS, JavaScript, Run, Insert into Selected, Copy Structure, and Saved Sections.
+- Replaced the floating panel with a compact resizable Bricks dock focused on HTML, CSS, JavaScript, Run, Insert into Selected, Copy Structure, and Saved Sections.
 - Required an explicit selected, nestable Bricks target before insertion and removed component page-root fallback.
 - Added selected-target ID remapping, target children updates, content hash checks, locked/non-nestable target blocking, and post-filter class-reference validation.
 - Added a controlled `Jigma Page Styles` route for confirmed page-level CSS while keeping class-owned CSS on global class records.
 
 ## Jigma Bricks plugin compatibility adapter - 2026-06-22
 
-- Bumped the WordPress plugin POC to `0.1.1`.
+- Bumped the WordPress plugin adapter to `0.1.1`.
 - Aligned plugin insertion with the shared Bricks Compatibility payload shape used by standalone Copy Bricks Structure.
 - Preserved native Bricks class records and `_cssGlobalClasses` references instead of converting them to raw element classes.
 - Added hard conflicts for existing same-name Bricks global classes with different settings.
 - Validated class references before saving page content and kept global class writes ahead of element writes.
-- Documented builder reload, root-only insertion, unsigned code review, and remaining live Bricks QA requirements.
+- Documented builder reload, unsigned code review, and remaining live Bricks QA requirements.
 
 ## Media SVG Overlay Code Fidelity - 2026-06-21
 
@@ -36,8 +36,8 @@
 - Generated package audit, bundle size, browser smoke, version, checksum, and plugin package artifacts for beta release review.
 - Rebuilt `jigma-bricks.zip`.
 
-## 0.1.0 - Initial POC
+## 0.1.0 - Initial plugin version
 
 - Standalone Jigma converter workspace.
 - Bricks JSON output with native Bricks class records.
-- WordPress Bricks plugin proof of concept.
+- WordPress Bricks plugin foundation.

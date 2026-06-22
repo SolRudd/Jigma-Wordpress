@@ -143,6 +143,10 @@
   }
 
   function describeTarget(id) {
+    function targetLabel(summary, targetId) {
+      return (summary.label || summary.name || "Element") + " \u00b7 " + summary.name + " \u00b7 " + targetId;
+    }
+
     if (!id) {
       return {
         id: "",
@@ -159,7 +163,7 @@
         id: String(id),
         exists: false,
         acceptsChildren: false,
-        label: "Unknown target - " + id,
+        label: "Unknown target \u00b7 " + id,
         message: "The selected Bricks element is not in the saved page content. Save or reload Bricks, then select it again.",
       };
     }
@@ -172,7 +176,7 @@
         id: String(id),
         exists: true,
         acceptsChildren: false,
-        label: (summary.label || summary.name || "Element") + " - " + summary.name + " - " + id,
+        label: targetLabel(summary, id),
         message: lockedMessage,
       };
     }
@@ -181,7 +185,7 @@
       id: String(id),
       exists: true,
       acceptsChildren: true,
-      label: (summary.label || summary.name || "Element") + " - " + summary.name + " - " + id,
+      label: targetLabel(summary, id),
       message: "Ready to insert.",
     };
   }
