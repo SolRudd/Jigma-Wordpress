@@ -2661,6 +2661,18 @@ describe("Bricks export", () => {
     expect(panelJs).toContain('dockState: "expanded"');
     expect(panelJs).toContain("dockHeight: 320");
     expect(panelJs).toContain("Math.max(180, Math.min(ui.dockHeight, Math.round(window.innerHeight * 0.65)))");
+    expect(panelJs).toContain("function readStoredWorkspace()");
+    expect(panelJs).toContain("if (!isPlainObject(parsed))");
+    expect(panelJs).toContain("(parsed.html !== undefined && typeof parsed.html !== \"string\")");
+    expect(panelJs).toContain("html: typeof parsed.html === \"string\" ? parsed.html : \"\"");
+    expect(panelJs).toContain("setInitStage(\"bootstrap-state\")");
+    expect(panelJs).toContain("initializeBootstrapState()");
+    expect(panelJs).toContain("reportInitializationError(initStage, error)");
+    expect(panelJs).toContain("function readSavedSections()");
+    expect(panelJs).toContain("if (!Array.isArray(parsed))");
+    expect(panelJs).toContain("if (!parsed.every(isPlainObject))");
+    expect(panelJs).toContain("storageRemove(SAVED_SECTIONS_KEY)");
+    expect(panelJs).not.toContain("safeJsonParse(storageGet(WORKSPACE_KEY), {})");
     expect(panelJs).toContain("includeJsCode");
     expect(panelJs).toContain("Review required");
     expect(panelJs).toContain("Unsigned JavaScript: Signature required after import.");

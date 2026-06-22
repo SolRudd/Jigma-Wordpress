@@ -151,11 +151,15 @@
     }
   }
 
+  function isPlainObject(value) {
+    return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  }
+
   function storageGet(key) {
     try {
-      return window.localStorage ? window.localStorage.getItem(key) : "";
+      return window.localStorage ? window.localStorage.getItem(key) : null;
     } catch (error) {
-      return "";
+      return null;
     }
   }
 
@@ -179,7 +183,7 @@
   }
 
   function mergeUi(input) {
-    var value = input && typeof input === "object" ? input : {};
+    var value = isPlainObject(input) ? input : {};
     return {
       dockState: value.dockState || defaultUi.dockState,
       dockHeight: Number(value.dockHeight || defaultUi.dockHeight),
@@ -199,7 +203,7 @@
   }
 
   function isValidStoredUi(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (!isPlainObject(value)) return false;
     if (value.dockState && ["expanded", "collapsed", "hidden"].indexOf(value.dockState) === -1) return false;
     if (value.dockHeight !== undefined && (!Number.isFinite(Number(value.dockHeight)) || Number(value.dockHeight) < 120)) return false;
     if (value.activeEditor && ["html", "css", "js"].indexOf(value.activeEditor) === -1) return false;
@@ -210,13 +214,44 @@
 
   function readStoredUi() {
     var raw = storageGet(UI_KEY);
-    if (!raw) return defaultUi;
+    if (raw === null || raw === undefined) return defaultUi;
+    if (raw === "") {
+      storageRemove(UI_KEY);
+      return defaultUi;
+    }
     var parsed = safeJsonParse(raw, null);
     if (!isValidStoredUi(parsed)) {
       storageRemove(UI_KEY);
       return defaultUi;
     }
     return parsed;
+  }
+
+  function readStoredWorkspace() {
+    var raw = storageGet(WORKSPACE_KEY);
+    if (raw === null || raw === undefined) return {};
+    if (raw === "") {
+      storageRemove(WORKSPACE_KEY);
+      return {};
+    }
+    var parsed = safeJsonParse(raw, null);
+    if (!isPlainObject(parsed)) {
+      storageRemove(WORKSPACE_KEY);
+      return {};
+    }
+    if (
+      (parsed.html !== undefined && typeof parsed.html !== "string") ||
+      (parsed.css !== undefined && typeof parsed.css !== "string") ||
+      (parsed.js !== undefined && typeof parsed.js !== "string")
+    ) {
+      storageRemove(WORKSPACE_KEY);
+      return {};
+    }
+    return {
+      html: typeof parsed.html === "string" ? parsed.html : "",
+      css: typeof parsed.css === "string" ? parsed.css : "",
+      js: typeof parsed.js === "string" ? parsed.js : "",
+    };
   }
 
   function normalizeVisibility(visible) {
@@ -231,33 +266,45 @@
     return next;
   }
 
-  var ui = mergeUi(readStoredUi());
-  if (!ui.openExpandedOnLoad && !storageGet(UI_KEY)) {
-    ui.dockState = "collapsed";
-  }
-
-  var restoredWorkspace = ui.restoreLastWorkspace
-    ? safeJsonParse(storageGet(WORKSPACE_KEY), {})
-    : {};
-
-  var state = {
-    html: typeof restoredWorkspace.html === "string" ? restoredWorkspace.html : "",
-    css: typeof restoredWorkspace.css === "string" ? restoredWorkspace.css : "",
-    js: typeof restoredWorkspace.js === "string" ? restoredWorkspace.js : "",
-    lastRun: null,
-    target: null,
-    drawerOpen: false,
-    drawerMode: "review",
-    modal: null,
-    selectedSectionId: "",
-    pageStylesDecision: "none",
-    statusKind: "blocked",
-  };
-
+  var ui;
+  var state;
   var nodes = {};
   var liveAnalysisTimer = 0;
   var workspaceObserver = null;
   var mutationObserver = null;
+
+  function initializeBootstrapState() {
+    ui = mergeUi(readStoredUi());
+    if (!ui.openExpandedOnLoad && !storageGet(UI_KEY)) {
+      ui.dockState = "collapsed";
+    }
+
+    var restoredWorkspace = ui.restoreLastWorkspace
+      ? readStoredWorkspace()
+      : {};
+
+    state = {
+      html: restoredWorkspace.html || "",
+      css: restoredWorkspace.css || "",
+      js: restoredWorkspace.js || "",
+      lastRun: null,
+      target: null,
+      drawerOpen: false,
+      drawerMode: "review",
+      modal: null,
+      selectedSectionId: "",
+      pageStylesDecision: "none",
+      statusKind: "blocked",
+    };
+  }
+
+  try {
+    setInitStage("bootstrap-state");
+    initializeBootstrapState();
+  } catch (error) {
+    reportInitializationError(initStage, error);
+    return;
+  }
 
   function persistUi() {
     ui.visibleEditors = normalizeVisibility(ui.visibleEditors);
@@ -274,9 +321,22 @@
   }
 
   function readSavedSections() {
-    return safeJsonParse(storageGet(SAVED_SECTIONS_KEY) || "[]", []).filter(function (item) {
-      return item && typeof item === "object";
-    });
+    var raw = storageGet(SAVED_SECTIONS_KEY);
+    if (raw === null || raw === undefined) return [];
+    if (raw === "") {
+      storageRemove(SAVED_SECTIONS_KEY);
+      return [];
+    }
+    var parsed = safeJsonParse(raw, null);
+    if (!Array.isArray(parsed)) {
+      storageRemove(SAVED_SECTIONS_KEY);
+      return [];
+    }
+    if (!parsed.every(isPlainObject)) {
+      storageRemove(SAVED_SECTIONS_KEY);
+      return [];
+    }
+    return parsed;
   }
 
   function writeSavedSections(items) {
@@ -1278,6 +1338,7 @@
     reset.addEventListener("click", function () {
       storageRemove(UI_KEY);
       storageRemove(WORKSPACE_KEY);
+      storageRemove(SAVED_SECTIONS_KEY);
       ui = mergeUi(defaultUi);
       persistUi();
       syncDockState();
