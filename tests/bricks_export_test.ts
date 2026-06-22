@@ -2533,15 +2533,12 @@ describe("Bricks export", () => {
   });
 
   it("wires the WordPress insertion adapter to the Bricks Compatibility payload schema", () => {
-    const readTextFileSync = (globalThis as unknown as {
-      Deno: { readTextFileSync: (path: string) => string };
-    }).Deno.readTextFileSync;
-    const php = readTextFileSync("jigma-bricks/jigma-bricks.php");
-    const panelJs = readTextFileSync("jigma-bricks/assets/jigma-bricks.js");
-    const panelCss = readTextFileSync("jigma-bricks/assets/jigma-bricks.css");
-    const coreEntry = readTextFileSync("lib/plugin/jigma-core-entry.ts");
-    const coreWrapper = readTextFileSync("lib/plugin/jigma-core.ts");
-    const coreBundle = readTextFileSync("jigma-bricks/assets/jigma-core.js");
+    const php = readFileSync("jigma-bricks/jigma-bricks.php", "utf8");
+    const panelJs = readFileSync("jigma-bricks/assets/jigma-bricks.js", "utf8");
+    const panelCss = readFileSync("jigma-bricks/assets/jigma-bricks.css", "utf8");
+    const coreEntry = readFileSync("lib/plugin/jigma-core-entry.ts", "utf8");
+    const coreWrapper = readFileSync("lib/plugin/jigma-core.ts", "utf8");
+    const coreBundle = readFileSync("jigma-bricks/assets/jigma-core.js", "utf8");
 
     expect(php).toContain("JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION");
     expect(php).toContain("Plugin URI: https://jigma.co.uk/");
