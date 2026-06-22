@@ -3073,6 +3073,8 @@ describe("Bricks export", () => {
     expect(php).toContain("'builderDetected'   => (bool) $context['builderSignal']");
     expect(php).toContain("'contentHash'");
     expect(php).toContain("'contentSummary'");
+    expect(php).toContain("'components'");
+    expect(php).toContain("'iconUrl'");
     expect(php).toContain("jigma_bricks_validate_compatibility_payload");
     expect(php).toContain("'bricksCopiedElements' !== (string) $payload['source']");
     expect(php).toContain("'globalClasses'");
@@ -3089,6 +3091,18 @@ describe("Bricks export", () => {
     expect(php).toContain("$target_id");
     expect(php).toContain("? $target_id");
     expect(php).toContain("'insertedRootIds'");
+    expect(php).toContain("'componentId'");
+    expect(php).toContain("'component'");
+    expect(php).toContain("'components'    => jigma_bricks_summarize_components");
+    expect(php).toContain("_jigma_components_v1");
+    expect(php).toContain("jigma_bricks_get_components_registry");
+    expect(php).toContain("jigma_bricks_save_components_registry");
+    expect(php).toContain("jigma_bricks_make_component_record");
+    expect(php).toContain("jigma_bricks_update_component");
+    expect(php).toContain("wp_ajax_jigma_bricks_update_component");
+    expect(php).toContain("jigma_bricks_remove_elements_by_ids");
+    expect(php).toContain("jigma_bricks_replace_child_sequence");
+    expect(php).toContain("jigma_bricks_merge_global_classes_for_component_update");
     expect(php).toContain("Jigma Page Styles");
     expect(php).toContain("jigma_bricks_apply_page_styles");
     expect(php).toContain("bricks_global_classes");
@@ -3142,6 +3156,17 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("pageStylesCss");
     expect(panelJs).toContain("contentHash");
     expect(panelJs).toContain("contentHash: config.contentHash");
+    expect(panelJs).toContain("setComponentRegistry");
+    expect(panelJs).toContain("selectedComponentForId");
+    expect(panelJs).toContain("Load selected component");
+    expect(panelJs).toContain("Keep current source");
+    expect(panelJs).toContain("Unsaved Jigma changes");
+    expect(panelJs).toContain("Update Component");
+    expect(panelJs).toContain("jigma_bricks_update_component");
+    expect(panelJs).toContain("componentId");
+    expect(panelJs).toContain("form.append(\"html\", state.html)");
+    expect(panelJs).toContain("form.append(\"css\", state.css)");
+    expect(panelJs).toContain("form.append(\"javascript\", state.js)");
     expect(panelJs).toContain("state.target.exists");
     expect(panelJs).toContain("state.target.acceptsChildren");
     expect(panelJs).toContain("state.pageStylesDecision");
@@ -3155,7 +3180,7 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("modalFocusables");
     expect(panelJs).toContain('event.key === "Tab"');
     expect(panelJs).toContain('event.key === "Escape"');
-    expect(panelJs).toContain("liveAnalysis: false");
+    expect(panelJs).toContain("liveAnalysis: true");
     expect(panelJs).toContain("isValidStoredUi");
     expect(panelJs).toContain("storageGet(UI_KEY)");
     expect(panelJs).toContain("storageRemove(UI_KEY)");
@@ -3164,10 +3189,10 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("confirmBeforeInsert: true");
     expect(panelJs).toContain("clearAfterInsert: false");
     expect(panelJs).toContain('dockState: "collapsed"');
-    expect(panelJs).toContain("dockHeight: 300");
+    expect(panelJs).toContain("dockHeight: 230");
     expect(panelJs).toContain("visibleEditors: { html: true, css: true, js: false }");
     expect(panelJs).toContain("rememberDockState: true");
-    expect(panelJs).toContain("Math.max(180, Math.min(ui.dockHeight, Math.round(window.innerHeight * 0.65)))");
+    expect(panelJs).toContain("Math.max(180, Math.min(ui.dockHeight, 320, Math.round(window.innerHeight * 0.65)))");
     expect(panelJs).toContain("function readStoredWorkspace()");
     expect(panelJs).toContain("if (!isPlainObject(parsed))");
     expect(panelJs).toContain("(parsed.html !== undefined && typeof parsed.html !== \"string\")");
@@ -3185,6 +3210,7 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("Unsigned JavaScript: Signature required after import.");
     expect(panelJs).toContain("Jigma Page Styles");
     expect(panelJs).toContain("Include as Jigma Page Styles");
+    expect(panelJs).toContain("Full document split into HTML, CSS and JavaScript.");
     expect(panelJs).toContain("keydown");
     expect(panelJs).not.toContain("Ctrl + Shift + R");
     expect(panelJs).not.toContain("Meta + Shift + R");
@@ -3202,6 +3228,7 @@ describe("Bricks export", () => {
     expect(panelCss).toContain(".jigma-launcher--error");
     expect(panelCss).toContain(".jigma-init-error");
     expect(panelCss).toContain(".jigma-modal");
+    expect(panelCss).toContain("img.jigma-brand__mark");
     expect(panelCss).toContain("@media (prefers-reduced-motion: reduce)");
     expect(panelCss).not.toContain(".jigma-bricks-dock");
     expect(coreEntry).toContain("window.JigmaCore");
@@ -3335,14 +3362,23 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("Run Jigma to generate a Bricks Compatibility payload.");
     expect(panelJs).toContain("Select a container in Bricks before inserting.");
     expect(scheduleLiveAnalysis).not.toContain("insert(");
+    expect(scheduleLiveAnalysis).not.toContain("update(");
+    expect(scheduleLiveAnalysis).not.toContain("renderReviewDrawer");
     expect(doRun).not.toContain("insert(");
+    expect(doRun).not.toContain("update(");
     expect(panelCss).not.toMatch(unsafeGlobalSelector);
     expect(panelCss).not.toMatch(bareJigmaSelector);
     expect(panelCss).not.toContain("backdrop-filter");
     expect(panelCss).not.toContain("scale(");
     expect(panelCss).not.toContain(":hover {\n  transform");
     expect(panelCss).toContain("#jigma-bricks-root .jigma-dock.is-collapsed");
-    expect(panelCss).toContain("height: 56px");
+    expect(panelCss).toContain("height: 52px");
+    expect(panelCss).toContain("--jigma-dock-height: 230px");
+    expect(panelCss).toContain("#jigma-bricks-root .jigma-tabs {\n  align-items: center;");
+    expect(panelCss).toContain("display: flex;");
+    expect(panelCss).toContain("#jigma-bricks-root .jigma-editor:not(.is-active)");
+    expect(panelCss).toContain("#jigma-bricks-root .jigma-editor-gutters {\n  align-items: stretch;");
+    expect(panelCss).toContain("display: none;");
     expect(panelCss).toContain("#jigma-bricks-root .jigma-dock.is-collapsed .jigma-action-secondary");
     expect(panelCss).toContain("#jigma-bricks-root .jigma-dock.is-hidden");
     expect(panelCss).toContain("#jigma-bricks-root .jigma-launcher--error");
@@ -3352,6 +3388,70 @@ describe("Bricks export", () => {
     expect(panelCss).toContain("#jigma-bricks-root .jigma-diagnostics");
     expect(panelCss).toContain("#jigma-bricks-root .jigma-button:hover");
     expect(panelCss).toContain("transition-duration: 0.01ms !important");
+  });
+
+  it("adds Jigma component sync without storing source in Bricks element settings", () => {
+    const php = readFileSync("jigma-bricks/jigma-bricks.php", "utf8");
+    const panelJs = readFileSync("jigma-bricks/assets/jigma-bricks.js", "utf8");
+    const scheduleLiveAnalysis = panelJs.slice(
+      panelJs.indexOf("function scheduleLiveAnalysis"),
+      panelJs.indexOf("function minimalPayload"),
+    );
+
+    expect(php).toContain("function jigma_bricks_get_components_meta_key()");
+    expect(php).toContain("return '_jigma_components_v1';");
+    expect(php).toContain("'componentId'");
+    expect(php).toContain("'rootElementIds'");
+    expect(php).toContain("'allElementIds'");
+    expect(php).toContain("'parentElementId'");
+    expect(php).toContain("'html'");
+    expect(php).toContain("'css'");
+    expect(php).toContain("'javascript'");
+    expect(php).toContain("'sourceHash'");
+    expect(php).toContain("'payloadHash'");
+    expect(php).toContain("'createdAt'");
+    expect(php).toContain("'updatedAt'");
+    expect(php).toContain("'schemaVersion'");
+    expect(php).toContain("jigma_bricks_read_source_from_request");
+    expect(php).toContain("jigma_bricks_source_hash");
+    expect(php).toContain("jigma_bricks_payload_hash");
+    expect(php).toContain("jigma_bricks_find_component_index");
+    expect(php).toContain("jigma_component_subtree_missing");
+    expect(php).toContain("jigma_component_position_missing");
+    expect(php).toContain("allowInsertAsNew");
+    expect(php).toContain("removedElementIds");
+    expect(php).toContain("A Bricks global class named \"%s\" already exists with different settings outside this Jigma component");
+    expect(php).toContain("update_post_meta( $post_id, jigma_bricks_get_content_meta_key(), $updated_content );");
+    expect(php).toContain("jigma_bricks_save_components_registry( $post_id, $components );");
+    expect(php).not.toContain("'_jigmaComponent'");
+    expect(php).not.toContain("'jigmaSource'");
+
+    expect(panelJs).toContain("function setComponentRegistry");
+    expect(panelJs).toContain("componentByElementId");
+    expect(panelJs).toContain("selectedComponentForId");
+    expect(panelJs).toContain("function loadComponentSource");
+    expect(panelJs).toContain("state.html = snapshot.html");
+    expect(panelJs).toContain("state.css = snapshot.css");
+    expect(panelJs).toContain("state.js = snapshot.js");
+    expect(panelJs).toContain("function openUnsavedComponentModal");
+    expect(panelJs).toContain("Unsaved Jigma changes");
+    expect(panelJs).toContain("Load selected component");
+    expect(panelJs).toContain("Keep current source");
+    expect(panelJs).toContain("Cancel");
+    expect(panelJs).toContain("function doUpdateComponent");
+    expect(panelJs).toContain("JigmaBricksInsertAdapter.update");
+    expect(panelJs).toContain("applyMutationResponse");
+    expect(panelJs).toContain("componentLabel(state.selectedComponent)");
+    expect(panelJs).toContain("Update Component");
+    expect(panelJs).toContain("Full document split into HTML, CSS and JavaScript.");
+    expect(panelJs).toContain("Select a Section, Container, Block or Div");
+    expect(panelJs).toContain("Heading cannot contain inserted structure");
+    expect(panelJs).not.toContain("new DOMParser");
+    expect(panelJs).not.toContain("reverseConvert");
+    expect(scheduleLiveAnalysis).toContain("350");
+    expect(scheduleLiveAnalysis).not.toContain("insert(");
+    expect(scheduleLiveAnalysis).not.toContain("update(");
+    expect(scheduleLiveAnalysis).not.toContain("fetch(");
   });
 
   it("uses the shared Jigma Core wrapper for plugin payloads", () => {

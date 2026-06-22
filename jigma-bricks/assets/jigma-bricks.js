@@ -46,18 +46,19 @@
     return;
   }
 
-  var contentSummary = Array.isArray(config.contentSummary) ? config.contentSummary : [];
-  var contentById = new Map(contentSummary.map(function (element) {
-    return [String(element.id), element];
-  }));
+  var contentSummary = [];
+  var contentById = new Map();
+  var componentRegistry = [];
+  var componentById = new Map();
+  var componentByElementId = new Map();
 
   var defaultUi = {
     dockState: "collapsed",
-    dockHeight: 300,
+    dockHeight: 230,
     editorWidths: { html: 1, css: 1, js: 1 },
     visibleEditors: { html: true, css: true, js: false },
     activeEditor: "html",
-    liveAnalysis: false,
+    liveAnalysis: true,
     confirmBeforeInsert: true,
     restoreLastWorkspace: true,
     clearAfterInsert: false,
@@ -191,7 +192,7 @@
       editorWidths: Object.assign({}, defaultUi.editorWidths, value.editorWidths || {}),
       visibleEditors: normalizeVisibility(Object.assign({}, defaultUi.visibleEditors, value.visibleEditors || {})),
       activeEditor: value.activeEditor || defaultUi.activeEditor,
-      liveAnalysis: Boolean(value.liveAnalysis),
+      liveAnalysis: typeof value.liveAnalysis === "boolean" ? value.liveAnalysis : defaultUi.liveAnalysis,
       confirmBeforeInsert: value.confirmBeforeInsert !== false,
       restoreLastWorkspace: value.restoreLastWorkspace !== false,
       clearAfterInsert: Boolean(value.clearAfterInsert),
@@ -278,6 +279,8 @@
 
   function initializeBootstrapState() {
     ui = mergeUi(readStoredUi());
+    setContentSummary(config.contentSummary);
+    setComponentRegistry(config.components);
     if (!ui.rememberDockState) {
       ui.dockState = ui.openExpandedOnLoad ? "expanded" : "collapsed";
     }
@@ -297,6 +300,12 @@
       modal: null,
       pageStylesDecision: "none",
       statusKind: "blocked",
+      selectedComponent: null,
+      loadedComponentId: "",
+      loadedComponentSnapshot: null,
+      sourceDirty: false,
+      pendingComponentId: "",
+      ignoredComponentId: "",
     };
   }
 
@@ -341,7 +350,97 @@
     return parsed;
   }
 
-  function selectedIdFromGlobals() {
+  function setContentSummary(summary) {
+    contentSummary = Array.isArray(summary) ? summary : [];
+    contentById = new Map(contentSummary.map(function (element) {
+      return [String(element.id), element];
+    }));
+    config.contentSummary = contentSummary;
+  }
+
+  function normalizeComponent(record) {
+    if (!isPlainObject(record) || !record.componentId) return null;
+    return {
+      componentId: String(record.componentId),
+      name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : "Jigma Component",
+      rootElementIds: Array.isArray(record.rootElementIds) ? record.rootElementIds.map(String).filter(Boolean) : [],
+      allElementIds: Array.isArray(record.allElementIds) ? record.allElementIds.map(String).filter(Boolean) : [],
+      parentElementId: record.parentElementId ? String(record.parentElementId) : "",
+      html: typeof record.html === "string" ? record.html : "",
+      css: typeof record.css === "string" ? record.css : "",
+      javascript: typeof record.javascript === "string" ? record.javascript : "",
+      sourceHash: typeof record.sourceHash === "string" ? record.sourceHash : "",
+      payloadHash: typeof record.payloadHash === "string" ? record.payloadHash : "",
+      createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+      updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : "",
+      schemaVersion: typeof record.schemaVersion === "string" ? record.schemaVersion : "jigma-component.v1",
+    };
+  }
+
+  function setComponentRegistry(records) {
+    componentRegistry = (Array.isArray(records) ? records : []).map(normalizeComponent).filter(Boolean);
+    componentById = new Map();
+    componentByElementId = new Map();
+    componentRegistry.forEach(function (component) {
+      componentById.set(component.componentId, component);
+      component.allElementIds.forEach(function (elementId) {
+        componentByElementId.set(String(elementId), component);
+      });
+    });
+    config.components = componentRegistry;
+  }
+
+  function selectedComponentForId(id) {
+    if (!id) return null;
+    return componentByElementId.get(String(id)) || null;
+  }
+
+  function componentLabel(component) {
+    if (!component) return "";
+    return (component.name || "Jigma Component") + " \u00b7 Editable";
+  }
+
+  function currentSourceSnapshot() {
+    return {
+      html: state.html,
+      css: state.css,
+      js: state.js,
+    };
+  }
+
+  function componentSourceSnapshot(component) {
+    return {
+      html: component && typeof component.html === "string" ? component.html : "",
+      css: component && typeof component.css === "string" ? component.css : "",
+      js: component && typeof component.javascript === "string" ? component.javascript : "",
+    };
+  }
+
+  function snapshotsEqual(left, right) {
+    return Boolean(left && right) &&
+      left.html === right.html &&
+      left.css === right.css &&
+      left.js === right.js;
+  }
+
+  function hasWorkspaceSource() {
+    return Boolean(state.html.trim() || state.css.trim() || state.js.trim());
+  }
+
+  function sourceMatchesLoadedSnapshot() {
+    return state.loadedComponentSnapshot
+      ? snapshotsEqual(currentSourceSnapshot(), state.loadedComponentSnapshot)
+      : false;
+  }
+
+  function markSourceDirty() {
+    state.lastRun = null;
+    state.sourceDirty = state.loadedComponentId
+      ? !sourceMatchesLoadedSnapshot()
+      : hasWorkspaceSource();
+  }
+
+  function readSelectedBricksElementId() {
     var candidates = [
       window.bricksData && window.bricksData.selectedElement && window.bricksData.selectedElement.id,
       window.bricksData && window.bricksData.selectedElementId,
@@ -367,6 +466,10 @@
       "";
   }
 
+  function selectedIdFromGlobals() {
+    return readSelectedBricksElementId();
+  }
+
   function describeTarget(id) {
     function label(summary, targetId) {
       var name = summary.name || "Element";
@@ -379,9 +482,9 @@
         id: "",
         exists: false,
         acceptsChildren: false,
-        label: "No target selected",
-        shortLabel: "No target selected",
-        message: "Select a container in Bricks before inserting.",
+        label: "Select a Section, Container, Block or Div",
+        shortLabel: "Select a Section, Container, Block or Div",
+        message: "Select a Section, Container, Block or Div",
       };
     }
 
@@ -403,10 +506,10 @@
         exists: true,
         acceptsChildren: false,
         label: label(summary, id),
-        shortLabel: summary.label || summary.name || "Element",
+        shortLabel: "heading" === summary.name ? "Heading cannot contain inserted structure" : (summary.label || summary.name || "Element"),
         message: summary.locked
           ? "The selected element is locked or unsuitable for insertion. Select another nestable element."
-          : "The selected element cannot contain children.",
+          : ("heading" === summary.name ? "Heading cannot contain inserted structure" : "The selected element cannot contain children."),
       };
     }
 
@@ -540,12 +643,28 @@
       var postId = Number(config.postId || 0);
       if (!postId && window.bricksData && window.bricksData.postId) postId = Number(window.bricksData.postId);
       if (!postId && window.BRICKS_DATA && window.BRICKS_DATA.postId) postId = Number(window.BRICKS_DATA.postId);
+      var selectedId = selectedIdFromGlobals();
 
       return {
         postId: postId || 0,
         contentHash: config.contentHash || "",
-        selectedTarget: describeTarget(selectedIdFromGlobals()),
+        selectedElementId: selectedId,
+        selectedComponent: selectedComponentForId(selectedId),
+        selectedTarget: describeTarget(selectedId),
       };
+    },
+    appendCommonFields: function (form, payload, options) {
+      form.append("nonce", config.insertNonce);
+      form.append("builderContext", "1");
+      form.append("postId", String(options.postId));
+      form.append("contentHash", String(options.contentHash || ""));
+      form.append("payload", JSON.stringify(payload));
+      form.append("html", state.html);
+      form.append("css", state.css);
+      form.append("javascript", state.js);
+      form.append("includeJsCode", options.includeJsCode ? "1" : "");
+      form.append("pageStylesCss", options.pageStylesCss ? options.pageStylesCss : "");
+      form.append("schemaVersion", config.compatibilitySchemaVersion || SCHEMA_VERSION);
     },
     insert: function (payload, options) {
       var details = this.inspect();
@@ -565,15 +684,13 @@
       }
 
       form.append("action", "jigma_bricks_insert");
-      form.append("nonce", config.insertNonce);
-      form.append("builderContext", "1");
-      form.append("postId", String(details.postId));
       form.append("targetId", details.selectedTarget.id);
-      form.append("contentHash", String(details.contentHash || ""));
-      form.append("payload", JSON.stringify(payload));
-      form.append("includeJsCode", options && options.includeJsCode ? "1" : "");
-      form.append("pageStylesCss", options && options.pageStylesCss ? options.pageStylesCss : "");
-      form.append("schemaVersion", config.compatibilitySchemaVersion || SCHEMA_VERSION);
+      this.appendCommonFields(form, payload, {
+        postId: details.postId,
+        contentHash: details.contentHash,
+        includeJsCode: options && options.includeJsCode,
+        pageStylesCss: options && options.pageStylesCss,
+      });
 
       return fetch(config.ajaxUrl, {
         body: form,
@@ -586,6 +703,46 @@
       }).then(function (data) {
         if (!data || !data.success) {
           var error = new Error(data && data.data && data.data.message ? data.data.message : "Jigma insert was rejected by WordPress.");
+          error.data = data && data.data ? data.data : {};
+          throw error;
+        }
+        return data.data || {};
+      });
+    },
+    update: function (componentId, payload, options) {
+      var details = this.inspect();
+      var form = new FormData();
+
+      if (!config.ajaxUrl || !config.insertNonce) {
+        return Promise.reject(new Error("Jigma update endpoint is not available in this Bricks context."));
+      }
+      if (!details.postId) {
+        return Promise.reject(new Error("Jigma could not identify the current editable Bricks post."));
+      }
+      if (!componentId) {
+        return Promise.reject(new Error("Load a Jigma component before updating."));
+      }
+
+      form.append("action", "jigma_bricks_update_component");
+      form.append("componentId", String(componentId));
+      this.appendCommonFields(form, payload, {
+        postId: details.postId,
+        contentHash: details.contentHash,
+        includeJsCode: options && options.includeJsCode,
+        pageStylesCss: options && options.pageStylesCss,
+      });
+
+      return fetch(config.ajaxUrl, {
+        body: form,
+        credentials: "same-origin",
+        method: "POST",
+      }).then(function (response) {
+        return response.json().catch(function () {
+          throw new Error("Jigma update failed with an unreadable WordPress response.");
+        });
+      }).then(function (data) {
+        if (!data || !data.success) {
+          var error = new Error(data && data.data && data.data.message ? data.data.message : "Jigma update was rejected by WordPress.");
           error.data = data && data.data ? data.data : {};
           throw error;
         }
@@ -676,6 +833,88 @@
     return true;
   }
 
+  function loadComponentSource(component) {
+    if (!component) return;
+    var snapshot = componentSourceSnapshot(component);
+    state.html = snapshot.html;
+    state.css = snapshot.css;
+    state.js = snapshot.js;
+    state.lastRun = null;
+    state.loadedComponentId = component.componentId;
+    state.loadedComponentSnapshot = snapshot;
+    state.sourceDirty = false;
+    state.pendingComponentId = "";
+    state.ignoredComponentId = "";
+    if (state.js.trim()) {
+      ui.visibleEditors = normalizeVisibility(Object.assign({}, ui.visibleEditors, { js: true }));
+      persistUi();
+    }
+    persistWorkspace();
+    syncEditors();
+    scheduleLiveAnalysis();
+    updateStatus("Loaded " + (component.name || "Jigma component"), "target");
+  }
+
+  function openUnsavedComponentModal(component) {
+    if (!component || state.pendingComponentId === component.componentId) return;
+    state.pendingComponentId = component.componentId;
+    openModal("Unsaved Jigma changes", function (body) {
+      body.appendChild(el("p", "", "The selected Bricks element belongs to " + componentLabel(component) + ". Your current editor source has unsaved Jigma changes."));
+      var actions = el("div", "jigma-modal-actions");
+      var load = el("button", "jigma-button jigma-button--primary", "Load selected component");
+      var keep = el("button", "jigma-button", "Keep current source");
+      var cancel = el("button", "jigma-button", "Cancel");
+      load.type = keep.type = cancel.type = "button";
+      load.addEventListener("click", function () {
+        closeModal();
+        loadComponentSource(component);
+      });
+      keep.addEventListener("click", function () {
+        state.ignoredComponentId = component.componentId;
+        closeModal();
+        updateStatus("Current source kept. Selected component not loaded.", "target");
+      });
+      cancel.addEventListener("click", function () {
+        closeModal();
+      });
+      actions.append(load, keep, cancel);
+      body.appendChild(actions);
+    });
+  }
+
+  function maybeHandleSelectedComponent(component) {
+    if (!component) return;
+    if (state.loadedComponentId === component.componentId || state.ignoredComponentId === component.componentId) return;
+
+    if (hasWorkspaceSource() && (state.sourceDirty || !state.loadedComponentId)) {
+      openUnsavedComponentModal(component);
+      return;
+    }
+
+    loadComponentSource(component);
+  }
+
+  function applyMutationResponse(data) {
+    if (!data) return;
+    if (data.contentSummary) {
+      setContentSummary(data.contentSummary);
+    }
+    if (data.contentHash) {
+      config.contentHash = data.contentHash;
+    }
+    if (data.components) {
+      setComponentRegistry(data.components);
+    }
+    if (data.component && data.component.componentId) {
+      var component = normalizeComponent(data.component);
+      if (component) {
+        state.loadedComponentId = component.componentId;
+        state.loadedComponentSnapshot = componentSourceSnapshot(component);
+        state.sourceDirty = false;
+      }
+    }
+  }
+
   function runConversion() {
     if (!window.JigmaCore || typeof window.JigmaCore.convertToBricksCompatibility !== "function") {
       throw new Error("Jigma Core bundle is not available.");
@@ -702,7 +941,7 @@
       state.pageStylesDecision = "";
     }
     if (didSplit) {
-      updateStatus("Full document split before conversion.", "ready");
+      updateStatus("Full document split into HTML, CSS and JavaScript.", "ready");
     }
     return result;
   }
@@ -713,12 +952,11 @@
     liveAnalysisTimer = window.setTimeout(function () {
       try {
         runConversion();
-        renderReviewDrawer();
         updateStatus();
       } catch (error) {
         updateStatus(error.message || "Jigma validation failed.");
       }
-    }, 450);
+    }, 350);
   }
 
   function minimalPayload(result) {
@@ -805,6 +1043,9 @@
 
   function getVisibleEditorKinds() {
     return ["html", "css", "js"].filter(function (kind) {
+      if (kind === "js" && state && state.js && state.js.trim()) {
+        return true;
+      }
       return ui.visibleEditors[kind] !== false;
     });
   }
@@ -827,7 +1068,7 @@
     nodes.collapse.textContent = ui.dockState === "collapsed" ? "Expand" : "Collapse";
     nodes.collapse.title = ui.dockState === "collapsed" ? "Expand Jigma dock" : "Collapse dock - Escape";
     nodes.collapse.setAttribute("aria-expanded", ui.dockState === "expanded" ? "true" : "false");
-    nodes.dock.style.setProperty("--jigma-dock-height", Math.max(180, Math.min(ui.dockHeight, Math.round(window.innerHeight * 0.65))) + "px");
+    nodes.dock.style.setProperty("--jigma-dock-height", Math.max(180, Math.min(ui.dockHeight, 320, Math.round(window.innerHeight * 0.65))) + "px");
     setDiagnostics({ dockState: ui.dockState, rootFound: Boolean(nodes.root), mounted: Boolean(nodes.root) });
   }
 
@@ -862,6 +1103,8 @@
 
   function renderGutters() {
     nodes.gutters.innerHTML = "";
+    nodes.gutters.hidden = true;
+    return;
     var visibleKinds = getVisibleEditorKinds();
     if (visibleKinds.length < 2) return;
     visibleKinds.slice(0, -1).forEach(function (kind, index) {
@@ -907,11 +1150,20 @@
   }
 
   function updateTarget() {
-    state.target = JigmaBricksInsertAdapter.inspect().selectedTarget;
-    nodes.target.textContent = state.target.id ? state.target.shortLabel : "No target selected";
-    nodes.target.title = "Target: " + state.target.label;
+    var details = JigmaBricksInsertAdapter.inspect();
+    state.target = details.selectedTarget;
+    state.selectedComponent = details.selectedComponent;
+    if (state.selectedComponent) {
+      nodes.target.textContent = componentLabel(state.selectedComponent);
+      nodes.target.title = "Jigma component: " + state.selectedComponent.componentId;
+    } else {
+      nodes.target.textContent = state.target.id ? state.target.shortLabel : "Select a Section, Container, Block or Div";
+      nodes.target.title = "Target: " + state.target.label;
+    }
     nodes.target.classList.toggle("is-ready", Boolean(state.target.acceptsChildren));
-    nodes.target.classList.toggle("is-empty", !state.target.id);
+    nodes.target.classList.toggle("is-component", Boolean(state.selectedComponent));
+    nodes.target.classList.toggle("is-empty", !state.target.id && !state.selectedComponent);
+    maybeHandleSelectedComponent(state.selectedComponent);
     updateStatus();
   }
 
@@ -925,9 +1177,24 @@
   }
 
   function statusText() {
+    if (state.loadedComponentId) {
+      var loaded = componentById.get(state.loadedComponentId);
+      if (!state.lastRun) {
+        state.statusKind = state.sourceDirty ? "target" : "ready";
+        return (loaded ? loaded.name : "Jigma Component") + " loaded";
+      }
+      if (state.lastRun.diagnostics && state.lastRun.diagnostics.blocked) {
+        state.statusKind = "blocked";
+        return state.lastRun.diagnostics.blockingErrors[0] || "Jigma validation blocked output";
+      }
+      state.statusKind = state.sourceDirty ? "target" : "ready";
+      return "Ready to update \u00b7 " +
+        state.lastRun.diagnostics.elementCount + " elements \u00b7 " +
+        state.lastRun.diagnostics.classCount + " classes";
+    }
     if (!state.target || !state.target.id) {
       state.statusKind = "neutral";
-      return "No target selected";
+      return "Select a Section, Container, Block or Div";
     }
     if (!state.target.exists || !state.target.acceptsChildren) {
       state.statusKind = "blocked";
@@ -964,6 +1231,8 @@
     }
     nodes.status.dataset.status = state.statusKind;
     nodes.target.dataset.status = state.target && state.target.acceptsChildren ? "target" : state.statusKind;
+    nodes.insert.textContent = state.loadedComponentId ? "Update Component" : (config.insertLabel || "Insert into Selected");
+    nodes.insert.title = state.loadedComponentId ? "Update loaded Jigma component - Cmd/Ctrl + Shift + Enter" : "Insert into Selected - Cmd/Ctrl + Shift + Enter";
     nodes.insert.disabled = !canInsert();
     nodes.jsBadge.textContent = state.js.trim() ? "Review required" : "None";
     nodes.jsBadge.dataset.status = state.js.trim() ? "review" : "idle";
@@ -974,6 +1243,13 @@
       state.lastRun.pageLevelCss.ruleCount === 0 ||
       state.pageStylesDecision === "include" ||
       state.pageStylesDecision === "exclude";
+    if (state.loadedComponentId) {
+      return Boolean(
+        state.lastRun &&
+        !(state.lastRun.diagnostics && state.lastRun.diagnostics.blocked) &&
+        pageStylesReady
+      );
+    }
     return Boolean(
       state.lastRun &&
       !(state.lastRun.diagnostics && state.lastRun.diagnostics.blocked) &&
@@ -1004,6 +1280,21 @@
         review.appendChild(el("p", "jigma-review__item", "Unsigned JavaScript: Signature required after import."));
       }
       renderWarnings(review);
+    }
+
+    if (state.selectedComponent && state.loadedComponentId !== state.selectedComponent.componentId) {
+      var loadItem = el("div", "jigma-review__item");
+      loadItem.appendChild(el("strong", "", componentLabel(state.selectedComponent)));
+      loadItem.appendChild(el("p", "", "Load this component source into Jigma before updating it."));
+      var loadButton = el("button", "jigma-button jigma-button--primary", "Load selected component");
+      loadButton.type = "button";
+      loadButton.addEventListener("click", function () {
+        state.drawerOpen = false;
+        renderReviewDrawer();
+        loadComponentSource(state.selectedComponent);
+      });
+      loadItem.appendChild(loadButton);
+      review.appendChild(loadItem);
     }
 
     if (errorData && Array.isArray(errorData.conflicts)) {
@@ -1105,6 +1396,10 @@
       updateStatus();
       return;
     }
+    if (state.loadedComponentId) {
+      doUpdateComponent();
+      return;
+    }
     var payloadValidation = validateClipboardPayload(state.lastRun.payload);
     if (!payloadValidation.valid) {
       updateStatus(payloadValidation.message || "Jigma validation blocked insert.", "blocked");
@@ -1119,11 +1414,15 @@
       includeJsCode: Boolean(state.js.trim()) && ui.includeJavaScript,
       pageStylesCss: pageStylesCss,
     }).then(function (data) {
+      applyMutationResponse(data);
       if (ui.clearAfterInsert) {
         state.html = "";
         state.css = "";
         state.js = "";
         state.lastRun = null;
+        state.loadedComponentId = "";
+        state.loadedComponentSnapshot = null;
+        state.sourceDirty = false;
         persistWorkspace();
         syncEditors();
       }
@@ -1134,6 +1433,44 @@
       state.drawerMode = "review";
       renderReviewDrawer(error.data || {});
       updateStatus(error.message || "Insert failed.", "blocked");
+    }).finally(function () {
+      nodes.insert.disabled = !canInsert();
+    });
+  }
+
+  function doUpdateComponent() {
+    var component = componentById.get(state.loadedComponentId);
+    if (!component) {
+      updateStatus("Loaded Jigma component is no longer registered. Insert as new component.", "blocked");
+      return;
+    }
+    var payloadValidation = validateClipboardPayload(state.lastRun.payload);
+    if (!payloadValidation.valid) {
+      updateStatus(payloadValidation.message || "Jigma validation blocked update.", "blocked");
+      return;
+    }
+    if (ui.confirmBeforeInsert && !window.confirm("Update " + (component.name || "Jigma component") + " in Bricks?")) {
+      return;
+    }
+    var pageStylesCss = state.pageStylesDecision === "include" ? state.lastRun.pageLevelCss.css : "";
+    nodes.insert.disabled = true;
+    JigmaBricksInsertAdapter.update(state.loadedComponentId, state.lastRun.payload, {
+      includeJsCode: Boolean(state.js.trim()) && ui.includeJavaScript,
+      pageStylesCss: pageStylesCss,
+    }).then(function (data) {
+      applyMutationResponse(data);
+      var codeWarning = data.codeWarnings && data.codeWarnings.length ? " " + data.codeWarnings[0] : "";
+      updateStatus((data.message || "Updated. Reload the Bricks builder to view saved content.") + codeWarning, "inserted");
+    }).catch(function (error) {
+      if (error.data && error.data.allowInsertAsNew) {
+        state.loadedComponentId = "";
+        state.loadedComponentSnapshot = null;
+        state.sourceDirty = true;
+      }
+      state.drawerOpen = true;
+      state.drawerMode = "review";
+      renderReviewDrawer(error.data || {});
+      updateStatus(error.message || "Update failed.", "blocked");
     }).finally(function () {
       nodes.insert.disabled = !canInsert();
     });
@@ -1281,7 +1618,7 @@
     var input = document.createElement("input");
     input.type = "range";
     input.min = "180";
-    input.max = String(Math.round(window.innerHeight * 0.65));
+    input.max = String(Math.min(320, Math.round(window.innerHeight * 0.65)));
     input.value = String(ui.dockHeight);
     input.addEventListener("input", function () {
       ui.dockHeight = Number(input.value);
@@ -1402,17 +1739,18 @@
     textarea.value = state[kind];
     format.addEventListener("click", function () {
       state[kind] = formatSource(kind, state[kind]);
-      state.lastRun = null;
+      markSourceDirty();
       persistWorkspace();
       syncEditors();
       scheduleLiveAnalysis();
+      updateStatus();
     });
     copy.addEventListener("click", function () {
       navigator.clipboard.writeText(state[kind] || "");
     });
     clear.addEventListener("click", function () {
       state[kind] = "";
-      state.lastRun = null;
+      markSourceDirty();
       persistWorkspace();
       syncEditors();
       scheduleLiveAnalysis();
@@ -1420,7 +1758,7 @@
     });
     textarea.addEventListener("input", function () {
       state[kind] = textarea.value;
-      state.lastRun = null;
+      markSourceDirty();
       persistWorkspace();
       scheduleLiveAnalysis();
       updateStatus();
@@ -1435,11 +1773,11 @@
       state.html = split.html;
       state.css = split.css;
       state.js = split.js;
-      state.lastRun = null;
+      markSourceDirty();
       persistWorkspace();
       syncEditors();
       scheduleLiveAnalysis();
-      updateStatus("Full document split into editors.", "ready");
+      updateStatus("Full document split into HTML, CSS and JavaScript.", "ready");
     });
     actions.append(format, copy, clear);
     header.append(title, badge, actions);
@@ -1461,7 +1799,15 @@
 
     var toolbar = el("header", "jigma-toolbar");
     var brand = el("div", "jigma-brand");
-    var mark = el("span", "jigma-brand__mark", "Jg");
+    var mark = config.iconUrl ? document.createElement("img") : el("span", "jigma-brand__mark", "Jg");
+    mark.className = "jigma-brand__mark";
+    if (config.iconUrl) {
+      mark.src = config.iconUrl;
+      mark.alt = "";
+      mark.width = 32;
+      mark.height = 32;
+      mark.loading = "eager";
+    }
     var wordmark = el("strong", "", "Jigma");
     var target = el("span", "jigma-target is-empty", "No target selected");
     var status = el("button", "jigma-status", "No target selected");
@@ -1553,7 +1899,7 @@
       var delta = event.key === "ArrowUp" ? 12 : event.key === "ArrowDown" ? -12 : 0;
       if (!delta) return;
       event.preventDefault();
-      ui.dockHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.65), ui.dockHeight + delta));
+      ui.dockHeight = Math.max(180, Math.min(320, Math.round(window.innerHeight * 0.65), ui.dockHeight + delta));
       persistUi();
       syncDockState();
     });
@@ -1589,7 +1935,7 @@
     var startY = event.clientY;
     var startHeight = nodes.dock.getBoundingClientRect().height;
     function move(moveEvent) {
-      ui.dockHeight = Math.max(180, Math.min(Math.round(window.innerHeight * 0.65), startHeight + startY - moveEvent.clientY));
+      ui.dockHeight = Math.max(180, Math.min(320, Math.round(window.innerHeight * 0.65), startHeight + startY - moveEvent.clientY));
       syncDockState();
     }
     function stop() {

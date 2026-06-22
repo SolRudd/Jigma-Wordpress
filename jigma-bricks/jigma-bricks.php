@@ -295,6 +295,7 @@ function jigma_bricks_enqueue_assets(): void {
 
 	$post_id         = jigma_bricks_get_builder_post_id();
 	$current_content = $post_id > 0 ? jigma_bricks_get_current_content( $post_id ) : array();
+	$components      = $post_id > 0 ? jigma_bricks_get_components_registry( $post_id ) : array();
 	$assets          = jigma_bricks_required_asset_files();
 	$missing_assets  = jigma_bricks_missing_asset_files();
 
@@ -344,6 +345,8 @@ function jigma_bricks_enqueue_assets(): void {
 			'postId'               => $post_id,
 			'contentHash'          => jigma_bricks_content_hash( $current_content ),
 			'contentSummary'       => jigma_bricks_summarize_content( $current_content ),
+			'components'           => jigma_bricks_summarize_components( $components ),
+			'iconUrl'              => jigma_bricks_asset_url( 'assets/jigma-icon.svg' ),
 			'targetBricksVersion'  => JIGMA_BRICKS_TARGET_VERSION,
 			'compatibilitySchemaVersion' => JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION,
 			'sourceUrl'            => 'jigma.local',
@@ -431,6 +434,10 @@ function jigma_bricks_get_content_meta_key(): string {
 	return '_bricks_page_content_2';
 }
 
+function jigma_bricks_get_components_meta_key(): string {
+	return '_jigma_components_v1';
+}
+
 function jigma_bricks_get_global_classes_option_name(): string {
 	if ( defined( 'BRICKS_DB_GLOBAL_CLASSES' ) && is_string( BRICKS_DB_GLOBAL_CLASSES ) ) {
 		return BRICKS_DB_GLOBAL_CLASSES;
@@ -507,6 +514,259 @@ function jigma_bricks_summarize_content( array $content ): array {
 			)
 		)
 	);
+}
+
+function jigma_bricks_read_source_from_request(): array {
+	return array(
+		'html'       => isset( $_POST['html'] ) ? jigma_bricks_clean_string( wp_unslash( $_POST['html'] ) ) : '',
+		'css'        => isset( $_POST['css'] ) ? jigma_bricks_clean_string( wp_unslash( $_POST['css'] ) ) : '',
+		'javascript' => isset( $_POST['javascript'] ) ? jigma_bricks_clean_string( wp_unslash( $_POST['javascript'] ) ) : '',
+	);
+}
+
+function jigma_bricks_source_hash( array $source ): string {
+	return hash(
+		'sha256',
+		(string) wp_json_encode(
+			array(
+				'html'       => (string) ( $source['html'] ?? '' ),
+				'css'        => (string) ( $source['css'] ?? '' ),
+				'javascript' => (string) ( $source['javascript'] ?? '' ),
+			)
+		)
+	);
+}
+
+function jigma_bricks_payload_hash( array $payload ): string {
+	return hash( 'sha256', (string) wp_json_encode( $payload ) );
+}
+
+function jigma_bricks_normalize_id_list( $value ): array {
+	if ( ! is_array( $value ) ) {
+		return array();
+	}
+
+	return array_values(
+		array_unique(
+			array_filter(
+				array_map(
+					static function ( $id ) {
+						$id = sanitize_key( (string) $id );
+						return '' === $id ? null : $id;
+					},
+					$value
+				)
+			)
+		)
+	);
+}
+
+function jigma_bricks_normalize_component_record( $record ) {
+	if ( ! is_array( $record ) || empty( $record['componentId'] ) ) {
+		return null;
+	}
+
+	$source = array(
+		'html'       => isset( $record['html'] ) ? jigma_bricks_clean_string( $record['html'] ) : '',
+		'css'        => isset( $record['css'] ) ? jigma_bricks_clean_string( $record['css'] ) : '',
+		'javascript' => isset( $record['javascript'] ) ? jigma_bricks_clean_string( $record['javascript'] ) : '',
+	);
+
+	return array(
+		'componentId'     => sanitize_key( (string) $record['componentId'] ),
+		'name'            => isset( $record['name'] ) ? jigma_bricks_clean_string( $record['name'] ) : '',
+		'rootElementIds'  => jigma_bricks_normalize_id_list( $record['rootElementIds'] ?? array() ),
+		'allElementIds'   => jigma_bricks_normalize_id_list( $record['allElementIds'] ?? array() ),
+		'parentElementId' => isset( $record['parentElementId'] ) ? sanitize_key( (string) $record['parentElementId'] ) : '',
+		'html'            => $source['html'],
+		'css'             => $source['css'],
+		'javascript'      => $source['javascript'],
+		'sourceHash'      => isset( $record['sourceHash'] ) ? sanitize_text_field( (string) $record['sourceHash'] ) : jigma_bricks_source_hash( $source ),
+		'payloadHash'     => isset( $record['payloadHash'] ) ? sanitize_text_field( (string) $record['payloadHash'] ) : '',
+		'createdAt'       => isset( $record['createdAt'] ) ? sanitize_text_field( (string) $record['createdAt'] ) : current_time( 'mysql', true ),
+		'updatedAt'       => isset( $record['updatedAt'] ) ? sanitize_text_field( (string) $record['updatedAt'] ) : current_time( 'mysql', true ),
+		'schemaVersion'   => isset( $record['schemaVersion'] ) ? sanitize_text_field( (string) $record['schemaVersion'] ) : 'jigma-component.v1',
+	);
+}
+
+function jigma_bricks_get_components_registry( int $post_id ): array {
+	$raw = get_post_meta( $post_id, jigma_bricks_get_components_meta_key(), true );
+	if ( ! is_array( $raw ) ) {
+		return array();
+	}
+
+	return array_values(
+		array_filter(
+			array_map( 'jigma_bricks_normalize_component_record', $raw )
+		)
+	);
+}
+
+function jigma_bricks_save_components_registry( int $post_id, array $registry ): void {
+	update_post_meta(
+		$post_id,
+		jigma_bricks_get_components_meta_key(),
+		array_values(
+			array_filter(
+				array_map( 'jigma_bricks_normalize_component_record', $registry )
+			)
+		)
+	);
+}
+
+function jigma_bricks_summarize_components( array $registry ): array {
+	return array_values(
+		array_filter(
+			array_map(
+				static function ( $record ) {
+					return jigma_bricks_normalize_component_record( $record );
+				},
+				$registry
+			)
+		)
+	);
+}
+
+function jigma_bricks_generate_component_id( array $registry ): string {
+	$used_ids = array();
+	foreach ( $registry as $record ) {
+		if ( is_array( $record ) && ! empty( $record['componentId'] ) ) {
+			$used_ids[ (string) $record['componentId'] ] = true;
+		}
+	}
+
+	do {
+		$id = 'jigma-' . substr( strtolower( str_replace( '-', '', wp_generate_uuid4() ) ), 0, 12 );
+	} while ( isset( $used_ids[ $id ] ) );
+
+	return $id;
+}
+
+function jigma_bricks_make_component_name( array $elements, array $root_element_ids ): string {
+	foreach ( $root_element_ids as $root_id ) {
+		foreach ( $elements as $element ) {
+			if ( is_array( $element ) && isset( $element['id'] ) && (string) $element['id'] === (string) $root_id ) {
+				$label = isset( $element['label'] ) ? jigma_bricks_clean_string( $element['label'] ) : '';
+				if ( '' !== $label ) {
+					return $label;
+				}
+			}
+		}
+	}
+
+	return 'Jigma Component';
+}
+
+function jigma_bricks_make_component_record( string $component_id, array $source, array $payload, string $parent_id, array $root_element_ids, array $all_element_ids, array $elements, string $created_at = '' ): array {
+	$now = current_time( 'mysql', true );
+
+	return array(
+		'componentId'     => $component_id,
+		'name'            => jigma_bricks_make_component_name( $elements, $root_element_ids ),
+		'rootElementIds'  => array_values( $root_element_ids ),
+		'allElementIds'   => array_values( $all_element_ids ),
+		'parentElementId' => $parent_id,
+		'html'            => (string) ( $source['html'] ?? '' ),
+		'css'             => (string) ( $source['css'] ?? '' ),
+		'javascript'      => (string) ( $source['javascript'] ?? '' ),
+		'sourceHash'      => jigma_bricks_source_hash( $source ),
+		'payloadHash'     => jigma_bricks_payload_hash( $payload ),
+		'createdAt'       => '' === $created_at ? $now : $created_at,
+		'updatedAt'       => $now,
+		'schemaVersion'   => 'jigma-component.v1',
+	);
+}
+
+function jigma_bricks_find_component_index( array $registry, string $component_id ) {
+	foreach ( $registry as $index => $record ) {
+		if ( is_array( $record ) && (string) ( $record['componentId'] ?? '' ) === $component_id ) {
+			return $index;
+		}
+	}
+
+	return false;
+}
+
+function jigma_bricks_index_content_by_id( array $content ): array {
+	$indexed = array();
+	foreach ( $content as $element ) {
+		if ( is_array( $element ) && isset( $element['id'] ) ) {
+			$indexed[ (string) $element['id'] ] = $element;
+		}
+	}
+	return $indexed;
+}
+
+function jigma_bricks_get_elements_by_ids( array $content, array $ids ): array {
+	$wanted = array_fill_keys( array_map( 'strval', $ids ), true );
+	return array_values(
+		array_filter(
+			$content,
+			static function ( $element ) use ( $wanted ) {
+				return is_array( $element ) && isset( $element['id'] ) && isset( $wanted[ (string) $element['id'] ] );
+			}
+		)
+	);
+}
+
+function jigma_bricks_content_has_ids( array $content, array $ids ): bool {
+	$indexed = jigma_bricks_index_content_by_id( $content );
+	foreach ( $ids as $id ) {
+		if ( ! isset( $indexed[ (string) $id ] ) ) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function jigma_bricks_remove_elements_by_ids( array $content, array $ids ): array {
+	$remove = array_fill_keys( array_map( 'strval', $ids ), true );
+	$next   = array();
+
+	foreach ( $content as $element ) {
+		if ( ! is_array( $element ) || empty( $element['id'] ) || isset( $remove[ (string) $element['id'] ] ) ) {
+			continue;
+		}
+
+		if ( isset( $element['children'] ) && is_array( $element['children'] ) ) {
+			$element['children'] = array_values(
+				array_filter(
+					$element['children'],
+					static function ( $child_id ) use ( $remove ) {
+						return ! isset( $remove[ (string) $child_id ] );
+					}
+				)
+			);
+		}
+
+		$next[] = $element;
+	}
+
+	return $next;
+}
+
+function jigma_bricks_replace_child_sequence( array $children, array $old_root_ids, array $new_root_ids ): array {
+	$old_lookup = array_fill_keys( array_map( 'strval', $old_root_ids ), true );
+	$next       = array();
+	$inserted   = false;
+
+	foreach ( $children as $child_id ) {
+		if ( isset( $old_lookup[ (string) $child_id ] ) ) {
+			if ( ! $inserted ) {
+				$next     = array_merge( $next, $new_root_ids );
+				$inserted = true;
+			}
+			continue;
+		}
+
+		$next[] = (string) $child_id;
+	}
+
+	if ( ! $inserted ) {
+		$next = array_merge( $next, $new_root_ids );
+	}
+
+	return array_values( $next );
 }
 
 function jigma_bricks_generate_element_id( array $used_ids ): string {
@@ -724,6 +984,140 @@ function jigma_bricks_merge_global_classes( array $incoming_classes, array $exis
 	);
 }
 
+function jigma_bricks_collect_global_class_ids_from_elements( array $elements ): array {
+	$class_ids = array();
+
+	foreach ( $elements as $element ) {
+		if ( ! is_array( $element ) || empty( $element['settings']['_cssGlobalClasses'] ) || ! is_array( $element['settings']['_cssGlobalClasses'] ) ) {
+			continue;
+		}
+
+		foreach ( $element['settings']['_cssGlobalClasses'] as $class_id ) {
+			$class_id = (string) $class_id;
+			if ( '' !== $class_id ) {
+				$class_ids[ $class_id ] = true;
+			}
+		}
+	}
+
+	return array_keys( $class_ids );
+}
+
+function jigma_bricks_count_class_usage_outside_elements( array $content, array $excluded_element_ids ): array {
+	$excluded = array_fill_keys( array_map( 'strval', $excluded_element_ids ), true );
+	$usage    = array();
+
+	foreach ( $content as $element ) {
+		if ( ! is_array( $element ) || empty( $element['id'] ) || isset( $excluded[ (string) $element['id'] ] ) ) {
+			continue;
+		}
+
+		if ( empty( $element['settings']['_cssGlobalClasses'] ) || ! is_array( $element['settings']['_cssGlobalClasses'] ) ) {
+			continue;
+		}
+
+		foreach ( $element['settings']['_cssGlobalClasses'] as $class_id ) {
+			$class_id = (string) $class_id;
+			$usage[ $class_id ] = isset( $usage[ $class_id ] ) ? $usage[ $class_id ] + 1 : 1;
+		}
+	}
+
+	return $usage;
+}
+
+function jigma_bricks_merge_global_classes_for_component_update( array $incoming_classes, array $existing_classes, array $old_component_elements, array $current_content, array $old_component_ids, array &$warnings ): array {
+	$merged               = array_values( $existing_classes );
+	$used_ids             = array();
+	$existing_by_name     = array();
+	$id_map               = array();
+	$conflicts            = array();
+	$owned_class_ids      = array_fill_keys( jigma_bricks_collect_global_class_ids_from_elements( $old_component_elements ), true );
+	$outside_class_usage  = jigma_bricks_count_class_usage_outside_elements( $current_content, $old_component_ids );
+
+	foreach ( $merged as $index => $class ) {
+		if ( ! is_array( $class ) ) {
+			continue;
+		}
+
+		if ( isset( $class['id'] ) ) {
+			$used_ids[ (string) $class['id'] ] = true;
+		}
+
+		if ( isset( $class['name'] ) && '' !== (string) $class['name'] ) {
+			$existing_by_name[ (string) $class['name'] ] = array(
+				'index' => $index,
+				'class' => $class,
+			);
+		}
+	}
+
+	foreach ( $incoming_classes as $incoming ) {
+		if ( ! is_array( $incoming ) || empty( $incoming['name'] ) ) {
+			continue;
+		}
+
+		$incoming_id = isset( $incoming['id'] ) ? (string) $incoming['id'] : '';
+		$normalized  = jigma_bricks_normalize_global_class( $incoming, $used_ids );
+		$name        = $normalized['name'];
+
+		if ( '' === $name ) {
+			continue;
+		}
+
+		if ( isset( $existing_by_name[ $name ] ) ) {
+			$existing       = $existing_by_name[ $name ]['class'];
+			$existing_id    = isset( $existing['id'] ) ? (string) $existing['id'] : '';
+			$existing_index = $existing_by_name[ $name ]['index'];
+			$id_map[ $incoming_id ] = '' !== $existing_id ? $existing_id : $normalized['id'];
+
+			$existing_settings = isset( $existing['settings'] ) && is_array( $existing['settings'] )
+				? $existing['settings']
+				: array();
+
+			if ( ! jigma_bricks_settings_differ( $existing_settings, $normalized['settings'] ) ) {
+				continue;
+			}
+
+			$owned_by_component = '' !== $existing_id && isset( $owned_class_ids[ $existing_id ] );
+			$used_elsewhere    = '' !== $existing_id && ! empty( $outside_class_usage[ $existing_id ] );
+
+			if ( $owned_by_component && ! $used_elsewhere ) {
+				$normalized['id']       = $existing_id;
+				$merged[ $existing_index ] = $normalized;
+				$existing_by_name[ $name ]['class'] = $normalized;
+				continue;
+			}
+
+			$conflicts[] = array(
+				'type'     => 'global-class-name',
+				'name'     => $name,
+				'existing' => $existing_id,
+				'incoming' => $incoming_id,
+				'message'  => sprintf(
+					/* translators: %s: Bricks global class name. */
+					__( 'A Bricks global class named "%s" already exists with different settings outside this Jigma component. Rename or resolve the class before updating.', 'jigma-bricks' ),
+					$name
+				),
+			);
+			continue;
+		}
+
+		$used_ids[ $normalized['id'] ] = true;
+		$merged[]                     = $normalized;
+		$existing_by_name[ $name ]    = array(
+			'index' => count( $merged ) - 1,
+			'class' => $normalized,
+		);
+		$id_map[ $incoming_id ]       = $normalized['id'];
+	}
+
+	return array(
+		'classes'   => $merged,
+		'idMap'     => $id_map,
+		'conflicts' => $conflicts,
+	);
+}
+
 function jigma_bricks_remap_global_class_ids( array $settings, array $global_class_id_map ): array {
 	if ( empty( $settings['_cssGlobalClasses'] ) || ! is_array( $settings['_cssGlobalClasses'] ) ) {
 		return $settings;
@@ -773,6 +1167,32 @@ function jigma_bricks_validate_global_class_references( array $elements, array $
 	}
 
 	return array_values( array_unique( $warnings ) );
+}
+
+function jigma_bricks_get_code_warnings( array $payload, bool $include_js_code ): array {
+	if ( ! $include_js_code ) {
+		return array();
+	}
+
+	foreach ( $payload['content'] as $incoming_element ) {
+		if (
+			is_array( $incoming_element ) &&
+			isset( $incoming_element['name'], $incoming_element['settings'] ) &&
+			'code' === $incoming_element['name'] &&
+			is_array( $incoming_element['settings'] ) &&
+			(
+				! empty( $incoming_element['settings']['javascriptCode'] ) ||
+				! empty( $incoming_element['settings']['javascript'] ) ||
+				! empty( $incoming_element['settings']['js'] )
+			)
+		) {
+			return array(
+				__( 'JavaScript signature required. This section contains one unsigned Bricks Code element. Review and sign it inside Bricks before enabling execution.', 'jigma-bricks' ),
+			);
+		}
+	}
+
+	return array();
 }
 
 function jigma_bricks_request_css_regeneration( int $post_id ): bool {
@@ -1074,6 +1494,7 @@ function jigma_bricks_insert_generated_elements(): void {
 			400
 		);
 	}
+	$source = jigma_bricks_read_source_from_request();
 
 	$target_id = isset( $_POST['targetId'] ) ? sanitize_key( wp_unslash( $_POST['targetId'] ) ) : '';
 	if ( '' === $target_id ) {
@@ -1087,27 +1508,10 @@ function jigma_bricks_insert_generated_elements(): void {
 	}
 
 	$include_js_code  = ! empty( $_POST['includeJsCode'] );
-	$code_warnings     = array();
-	if ( $include_js_code ) {
-		foreach ( $payload['content'] as $incoming_element ) {
-			if (
-				is_array( $incoming_element ) &&
-				isset( $incoming_element['name'], $incoming_element['settings'] ) &&
-				'code' === $incoming_element['name'] &&
-				is_array( $incoming_element['settings'] ) &&
-				(
-					! empty( $incoming_element['settings']['javascriptCode'] ) ||
-					! empty( $incoming_element['settings']['javascript'] ) ||
-					! empty( $incoming_element['settings']['js'] )
-				)
-			) {
-				$code_warnings[] = __( 'JavaScript signature required. This section contains one unsigned Bricks Code element. Review and sign it inside Bricks before enabling execution.', 'jigma-bricks' );
-				break;
-			}
-		}
-	}
+	$code_warnings    = jigma_bricks_get_code_warnings( $payload, $include_js_code );
 	$current_content  = jigma_bricks_get_current_content( $post_id );
 	$current_classes  = jigma_bricks_get_current_global_classes();
+	$components       = jigma_bricks_get_components_registry( $post_id );
 	$posted_hash      = isset( $_POST['contentHash'] ) ? sanitize_text_field( wp_unslash( $_POST['contentHash'] ) ) : '';
 	$current_hash     = jigma_bricks_content_hash( $current_content );
 
@@ -1270,8 +1674,30 @@ function jigma_bricks_insert_generated_elements(): void {
 	$page_styles_css = isset( $_POST['pageStylesCss'] ) ? trim( (string) wp_unslash( $_POST['pageStylesCss'] ) ) : '';
 	$page_styles     = jigma_bricks_apply_page_styles( $updated_content, $page_styles_css );
 	$updated_content = $page_styles['content'];
+	$component_id    = jigma_bricks_generate_component_id( $components );
+	$all_element_ids = array_values(
+		array_filter(
+			array_map(
+				static function ( $element ) {
+					return is_array( $element ) && isset( $element['id'] ) ? (string) $element['id'] : null;
+				},
+				$new_elements
+			)
+		)
+	);
+	$component_record = jigma_bricks_make_component_record(
+		$component_id,
+		$source,
+		$payload,
+		$target_id,
+		$inserted_root_ids,
+		$all_element_ids,
+		$new_elements
+	);
+	$components[] = $component_record;
 
 	update_post_meta( $post_id, jigma_bricks_get_content_meta_key(), $updated_content );
+	jigma_bricks_save_components_registry( $post_id, $components );
 	update_post_meta( $post_id, '_bricks_editor_mode', 'bricks' );
 	$css_regenerated = jigma_bricks_request_css_regeneration( $post_id );
 	clean_post_cache( $post_id );
@@ -1280,6 +1706,9 @@ function jigma_bricks_insert_generated_elements(): void {
 		array(
 			'message'       => __( 'Jigma elements inserted. Reload the Bricks builder to show the updated canvas.', 'jigma-bricks' ),
 			'insertedCount' => count( $new_elements ),
+			'componentId'   => $component_id,
+			'component'     => $component_record,
+			'components'    => jigma_bricks_summarize_components( $components ),
 			'targetId'      => $target_id,
 			'insertedRootIds' => $inserted_root_ids,
 			'globalClasses' => count( $class_merge['classes'] ),
@@ -1293,12 +1722,325 @@ function jigma_bricks_insert_generated_elements(): void {
 			'codeWarnings'  => $code_warnings,
 			'totalCount'    => count( $updated_content ),
 			'metaKey'       => jigma_bricks_get_content_meta_key(),
+			'contentHash'   => jigma_bricks_content_hash( $updated_content ),
+			'contentSummary' => jigma_bricks_summarize_content( $updated_content ),
 			'cssRegenerated' => $css_regenerated,
 			'reloadNeeded'  => true,
 		)
 	);
 }
 add_action( 'wp_ajax_jigma_bricks_insert', 'jigma_bricks_insert_generated_elements' );
+
+function jigma_bricks_update_component(): void {
+	check_ajax_referer( 'jigma_bricks_insert', 'nonce' );
+
+	$post_id = isset( $_POST['postId'] ) ? absint( wp_unslash( $_POST['postId'] ) ) : 0;
+	if ( $post_id <= 0 || ! current_user_can( 'edit_post', $post_id ) ) {
+		wp_send_json_error(
+			array( 'message' => __( 'Jigma could not identify an editable Bricks post.', 'jigma-bricks' ) ),
+			403
+		);
+	}
+
+	if ( ! jigma_bricks_is_bricks_active() ) {
+		wp_send_json_error(
+			array( 'message' => __( 'Bricks Builder was not detected.', 'jigma-bricks' ) ),
+			400
+		);
+	}
+
+	if ( empty( $_POST['builderContext'] ) ) {
+		wp_send_json_error(
+			array( 'message' => __( 'Jigma updates are only available from the Bricks builder context.', 'jigma-bricks' ) ),
+			400
+		);
+	}
+
+	$component_id = isset( $_POST['componentId'] ) ? sanitize_key( wp_unslash( $_POST['componentId'] ) ) : '';
+	if ( '' === $component_id ) {
+		wp_send_json_error(
+			array(
+				'message' => __( 'Jigma could not identify the component to update.', 'jigma-bricks' ),
+				'code'    => 'jigma_missing_component_id',
+			),
+			400
+		);
+	}
+
+	$payload_json = isset( $_POST['payload'] ) ? wp_unslash( $_POST['payload'] ) : '';
+	if ( strlen( (string) $payload_json ) > 2000000 ) {
+		wp_send_json_error(
+			array( 'message' => __( 'Jigma payload is too large for this beta update endpoint.', 'jigma-bricks' ) ),
+			413
+		);
+	}
+
+	$payload = jigma_bricks_validate_compatibility_payload( json_decode( (string) $payload_json, true ) );
+	if ( is_wp_error( $payload ) ) {
+		wp_send_json_error(
+			array(
+				'message' => $payload->get_error_message(),
+				'code'    => $payload->get_error_code(),
+			),
+			400
+		);
+	}
+
+	$source          = jigma_bricks_read_source_from_request();
+	$include_js_code = ! empty( $_POST['includeJsCode'] );
+	$code_warnings   = jigma_bricks_get_code_warnings( $payload, $include_js_code );
+	$current_content = jigma_bricks_get_current_content( $post_id );
+	$current_classes = jigma_bricks_get_current_global_classes();
+	$components      = jigma_bricks_get_components_registry( $post_id );
+	$posted_hash     = isset( $_POST['contentHash'] ) ? sanitize_text_field( wp_unslash( $_POST['contentHash'] ) ) : '';
+	$current_hash    = jigma_bricks_content_hash( $current_content );
+
+	if ( '' !== $posted_hash && ! hash_equals( $current_hash, $posted_hash ) ) {
+		wp_send_json_error(
+			array(
+				'message' => __( 'The saved Bricks content changed after Jigma loaded. Reload the builder before updating.', 'jigma-bricks' ),
+				'code'    => 'jigma_content_version_changed',
+			),
+			409
+		);
+	}
+
+	$component_index = jigma_bricks_find_component_index( $components, $component_id );
+	if ( false === $component_index ) {
+		wp_send_json_error(
+			array(
+				'message'          => __( 'This Jigma component is no longer registered on the current page. Insert it as a new component instead.', 'jigma-bricks' ),
+				'code'             => 'jigma_component_missing',
+				'allowInsertAsNew' => true,
+			),
+			409
+		);
+	}
+
+	$component        = $components[ $component_index ];
+	$parent_id        = (string) ( $component['parentElementId'] ?? '' );
+	$old_root_ids     = jigma_bricks_normalize_id_list( $component['rootElementIds'] ?? array() );
+	$old_all_ids      = jigma_bricks_normalize_id_list( $component['allElementIds'] ?? array() );
+	$parent_index     = jigma_bricks_find_element_index( $current_content, $parent_id );
+
+	if (
+		'' === $parent_id ||
+		false === $parent_index ||
+		empty( $old_root_ids ) ||
+		empty( $old_all_ids ) ||
+		! jigma_bricks_content_has_ids( $current_content, $old_all_ids )
+	) {
+		wp_send_json_error(
+			array(
+				'message'          => __( 'The saved Jigma component subtree could not be found. Insert the current source as a new component.', 'jigma-bricks' ),
+				'code'             => 'jigma_component_subtree_missing',
+				'allowInsertAsNew' => true,
+			),
+			409
+		);
+	}
+
+	$old_parent_children = isset( $current_content[ $parent_index ]['children'] ) && is_array( $current_content[ $parent_index ]['children'] )
+		? array_values( $current_content[ $parent_index ]['children'] )
+		: array();
+	if ( count( array_intersect( array_map( 'strval', $old_root_ids ), array_map( 'strval', $old_parent_children ) ) ) !== count( $old_root_ids ) ) {
+		wp_send_json_error(
+			array(
+				'message'          => __( 'The selected Jigma component no longer exists in its original position. Insert the current source as a new component.', 'jigma-bricks' ),
+				'code'             => 'jigma_component_position_missing',
+				'allowInsertAsNew' => true,
+			),
+			409
+		);
+	}
+
+	$old_component_elements = jigma_bricks_get_elements_by_ids( $current_content, $old_all_ids );
+	$content_without_old   = jigma_bricks_remove_elements_by_ids( $current_content, $old_all_ids );
+	$parent_index_after    = jigma_bricks_find_element_index( $content_without_old, $parent_id );
+	if ( false === $parent_index_after ) {
+		wp_send_json_error(
+			array(
+				'message'          => __( 'The Jigma component parent could not be preserved. Insert the current source as a new component.', 'jigma-bricks' ),
+				'code'             => 'jigma_component_parent_missing',
+				'allowInsertAsNew' => true,
+			),
+			409
+		);
+	}
+
+	$class_warnings = array();
+	$class_merge    = jigma_bricks_merge_global_classes_for_component_update(
+		$payload['globalClasses'],
+		$current_classes,
+		$old_component_elements,
+		$current_content,
+		$old_all_ids,
+		$class_warnings
+	);
+
+	if ( ! empty( $class_merge['conflicts'] ) ) {
+		wp_send_json_error(
+			array(
+				'message'   => __( 'Jigma found Bricks class-name conflicts. No content was updated.', 'jigma-bricks' ),
+				'code'      => 'jigma_global_class_conflict',
+				'conflicts' => $class_merge['conflicts'],
+			),
+			409
+		);
+	}
+
+	$incoming_content = array_slice( $payload['content'], 0, 250 );
+	$new_elements     = jigma_bricks_normalize_elements_for_insert(
+		$incoming_content,
+		$content_without_old,
+		$include_js_code,
+		$class_merge['idMap'],
+		$parent_id
+	);
+	$class_warnings   = array_merge(
+		$class_warnings,
+		jigma_bricks_validate_global_class_references( $new_elements, $class_merge['classes'] )
+	);
+
+	if ( ! empty( $class_warnings ) ) {
+		wp_send_json_error(
+			array(
+				'message' => __( 'Jigma found invalid Bricks class references. No content was updated.', 'jigma-bricks' ),
+				'code'    => 'jigma_invalid_class_references',
+				'errors'  => $class_warnings,
+			),
+			400
+		);
+	}
+
+	if ( empty( $new_elements ) ) {
+		wp_send_json_error(
+			array( 'message' => __( 'No insertable Bricks elements were generated for this update.', 'jigma-bricks' ) ),
+			400
+		);
+	}
+
+	$old_elements_indexed = jigma_bricks_index_content_by_id( $current_content );
+	$new_elements         = apply_filters(
+		'bricks/security_check_before_save/new_elements',
+		$new_elements,
+		$old_elements_indexed
+	);
+
+	if ( ! is_array( $new_elements ) ) {
+		wp_send_json_error(
+			array( 'message' => __( 'Bricks rejected the regenerated element payload.', 'jigma-bricks' ) ),
+			400
+		);
+	}
+
+	$post_filter_class_errors = jigma_bricks_validate_global_class_references( $new_elements, $class_merge['classes'] );
+	if ( ! empty( $post_filter_class_errors ) ) {
+		wp_send_json_error(
+			array(
+				'message' => __( 'Bricks security filtering left invalid class references. No content was updated.', 'jigma-bricks' ),
+				'code'    => 'jigma_filtered_invalid_class_references',
+				'errors'  => $post_filter_class_errors,
+			),
+			400
+		);
+	}
+
+	$updated_root_ids = array_values(
+		array_filter(
+			array_map(
+				static function ( $element ) use ( $parent_id ) {
+					if ( ! is_array( $element ) || (string) ( $element['parent'] ?? '' ) !== $parent_id ) {
+						return null;
+					}
+					return isset( $element['id'] ) ? (string) $element['id'] : null;
+				},
+				$new_elements
+			)
+		)
+	);
+
+	if ( empty( $updated_root_ids ) ) {
+		wp_send_json_error(
+			array(
+				'message' => __( 'No regenerated component root remained under the original parent after Bricks validation. No content was updated.', 'jigma-bricks' ),
+				'code'    => 'jigma_no_component_roots',
+			),
+			400
+		);
+	}
+
+	if ( ! empty( $class_merge['classes'] ) ) {
+		update_option( jigma_bricks_get_global_classes_option_name(), $class_merge['classes'], false );
+	}
+
+	$content_without_old[ $parent_index_after ]['children'] = jigma_bricks_replace_child_sequence(
+		$old_parent_children,
+		$old_root_ids,
+		$updated_root_ids
+	);
+
+	$updated_content = array_values( array_merge( $content_without_old, $new_elements ) );
+	$page_styles_css = isset( $_POST['pageStylesCss'] ) ? trim( (string) wp_unslash( $_POST['pageStylesCss'] ) ) : '';
+	$page_styles     = jigma_bricks_apply_page_styles( $updated_content, $page_styles_css );
+	$updated_content = $page_styles['content'];
+	$all_element_ids = array_values(
+		array_filter(
+			array_map(
+				static function ( $element ) {
+					return is_array( $element ) && isset( $element['id'] ) ? (string) $element['id'] : null;
+				},
+				$new_elements
+			)
+		)
+	);
+	$component_record = jigma_bricks_make_component_record(
+		$component_id,
+		$source,
+		$payload,
+		$parent_id,
+		$updated_root_ids,
+		$all_element_ids,
+		$new_elements,
+		(string) ( $component['createdAt'] ?? '' )
+	);
+	$components[ $component_index ] = $component_record;
+
+	update_post_meta( $post_id, jigma_bricks_get_content_meta_key(), $updated_content );
+	jigma_bricks_save_components_registry( $post_id, $components );
+	update_post_meta( $post_id, '_bricks_editor_mode', 'bricks' );
+	$css_regenerated = jigma_bricks_request_css_regeneration( $post_id );
+	clean_post_cache( $post_id );
+
+	wp_send_json_success(
+		array(
+			'message'       => __( 'Jigma component updated. Reload the Bricks builder to show the refreshed canvas.', 'jigma-bricks' ),
+			'updatedCount'  => count( $new_elements ),
+			'componentId'   => $component_id,
+			'component'     => $component_record,
+			'components'    => jigma_bricks_summarize_components( $components ),
+			'parentElementId' => $parent_id,
+			'updatedRootIds' => $updated_root_ids,
+			'removedElementIds' => $old_all_ids,
+			'globalClasses' => count( $class_merge['classes'] ),
+			'globalElements' => count( $payload['globalElements'] ),
+			'pageStyles'    => array(
+				'created' => (bool) $page_styles['created'],
+				'updated' => (bool) $page_styles['updated'],
+			),
+			'compatibilitySchemaVersion' => JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION,
+			'classWarnings' => $class_warnings,
+			'codeWarnings'  => $code_warnings,
+			'totalCount'    => count( $updated_content ),
+			'metaKey'       => jigma_bricks_get_content_meta_key(),
+			'contentHash'   => jigma_bricks_content_hash( $updated_content ),
+			'contentSummary' => jigma_bricks_summarize_content( $updated_content ),
+			'cssRegenerated' => $css_regenerated,
+			'reloadNeeded'  => true,
+		)
+	);
+}
+add_action( 'wp_ajax_jigma_bricks_update_component', 'jigma_bricks_update_component' );
 
 function jigma_bricks_admin_notice(): void {
 	if ( ! current_user_can( 'activate_plugins' ) || jigma_bricks_is_bricks_active() ) {
