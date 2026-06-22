@@ -1,9 +1,9 @@
 <?php
 /**
  * Plugin Name: Jigma Bricks
- * Plugin URI: https://jigma.local
+ * Plugin URI: https://jigma.co.uk/
  * Description: Focused Jigma beta dock for converting HTML, CSS, and optional JavaScript into Bricks Builder structures.
- * Version: 0.2.1-beta
+ * Version: 0.2.2-beta
  * Author: Jigma
  * Text Domain: jigma-bricks
  * Requires at least: 6.4
@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JIGMA_BRICKS_VERSION', '0.2.1-beta' );
+define( 'JIGMA_BRICKS_VERSION', '0.2.2-beta' );
 define( 'JIGMA_BRICKS_TARGET_VERSION', '2.3.7' );
 define( 'JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION', 'bricks-compatibility.v1' );
 define( 'JIGMA_BRICKS_PLUGIN_FILE', __FILE__ );
@@ -66,17 +66,47 @@ function jigma_bricks_request_value_contains_bricks( string $key ): bool {
 		in_array( $value, array( 'run', 'builder', 'preview' ), true );
 }
 
-function jigma_bricks_is_builder_context(): bool {
-	if ( ! jigma_bricks_is_bricks_active() || ! current_user_can( 'edit_posts' ) ) {
+function jigma_bricks_get_request_value( string $key ): string {
+	if ( ! isset( $_GET[ $key ] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		return '';
+	}
+
+	return sanitize_text_field( wp_unslash( $_GET[ $key ] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+}
+
+function jigma_bricks_current_user_can_load_builder(): bool {
+	$post_id = jigma_bricks_get_builder_post_id();
+
+	if ( $post_id > 0 ) {
+		return current_user_can( 'edit_post', $post_id );
+	}
+
+	return current_user_can( 'edit_posts' ) || current_user_can( 'edit_pages' );
+}
+
+function jigma_bricks_is_debug_override(): bool {
+	if ( '1' !== jigma_bricks_get_request_value( 'jigma_debug' ) || ! is_user_logged_in() ) {
 		return false;
 	}
 
+	return jigma_bricks_current_user_can_load_builder();
+}
+
+function jigma_bricks_request_has_builder_signal(): bool {
 	$query_keys = array(
 		'bricks',
 		'bricks_preview',
 		'bricks-preview',
 		'brickspreview',
 		'bricks_builder',
+		'bricks-builder',
+		'bricksbuilder',
+		'bricks_edit',
+		'bricks-edit',
+		'bricks_iframe',
+		'bricks-iframe',
+		'bricks_nonce',
+		'bricks_post_id',
 		'bricks_template',
 	);
 
@@ -86,54 +116,209 @@ function jigma_bricks_is_builder_context(): bool {
 		}
 	}
 
-	if ( is_admin() ) {
-		$page = isset( $_GET['page'] ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-			? sanitize_text_field( wp_unslash( $_GET['page'] ) ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-			: '';
-
-		if ( false !== stripos( $page, 'bricks' ) ) {
+	foreach ( array_keys( $_GET ) as $key ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( is_string( $key ) && 0 === stripos( $key, 'bricks' ) ) {
 			return true;
-		}
-
-		if ( function_exists( 'get_current_screen' ) ) {
-			$screen = get_current_screen();
-			if ( $screen && false !== stripos( (string) $screen->id, 'bricks' ) ) {
-				return true;
-			}
 		}
 	}
 
 	return false;
 }
 
+function jigma_bricks_core_reports_builder_context(): bool {
+	$checks = array(
+		'bricks_is_builder',
+		'bricks_is_builder_main',
+	);
+
+	foreach ( $checks as $function_name ) {
+		if ( function_exists( $function_name ) ) {
+			try {
+				if ( (bool) call_user_func( $function_name ) ) {
+					return true;
+				}
+			} catch ( Throwable $error ) {
+				continue;
+			}
+		}
+	}
+
+	if ( defined( 'BRICKS_IS_BUILDER' ) && BRICKS_IS_BUILDER ) {
+		return true;
+	}
+
+	if ( defined( 'BRICKS_BUILDER' ) && BRICKS_BUILDER ) {
+		return true;
+	}
+
+	return false;
+}
+
+function jigma_bricks_detect_builder_context(): array {
+	$debug_override = jigma_bricks_is_debug_override();
+	$reasons        = array();
+
+	if ( $debug_override ) {
+		$reasons[] = 'debug_override';
+	}
+
+	if ( jigma_bricks_core_reports_builder_context() ) {
+		$reasons[] = 'bricks_helper';
+	}
+
+	if ( jigma_bricks_request_has_builder_signal() ) {
+		$reasons[] = 'request_parameter';
+	}
+
+	if ( is_admin() ) {
+		$page = jigma_bricks_get_request_value( 'page' );
+
+		if ( false !== stripos( $page, 'bricks' ) ) {
+			$reasons[] = 'admin_page';
+		}
+
+		if ( function_exists( 'get_current_screen' ) ) {
+			$screen = get_current_screen();
+			if ( $screen && false !== stripos( (string) $screen->id, 'bricks' ) ) {
+				$reasons[] = 'admin_screen';
+			}
+		}
+	}
+
+	$bricks_active = jigma_bricks_is_bricks_active();
+	$can_load      = jigma_bricks_current_user_can_load_builder();
+	$builder_signal = in_array( 'bricks_helper', $reasons, true ) ||
+		in_array( 'request_parameter', $reasons, true ) ||
+		in_array( 'admin_page', $reasons, true ) ||
+		in_array( 'admin_screen', $reasons, true );
+
+	return array(
+		'detected'      => $debug_override || ( $bricks_active && $can_load && $builder_signal ),
+		'builderSignal' => $builder_signal,
+		'debug'         => $debug_override,
+		'bricksActive'  => $bricks_active,
+		'canLoad'       => $can_load,
+		'reasons'       => array_values( array_unique( $reasons ) ),
+	);
+}
+
+function jigma_bricks_is_builder_context(): bool {
+	$context = jigma_bricks_detect_builder_context();
+	return (bool) $context['detected'];
+}
+
+function jigma_bricks_required_asset_files(): array {
+	return array(
+		'css'   => 'assets/jigma-bricks.css',
+		'core'  => 'assets/jigma-core.js',
+		'panel' => 'assets/jigma-bricks.js',
+	);
+}
+
+function jigma_bricks_asset_path( string $relative_path ): string {
+	return JIGMA_BRICKS_PLUGIN_DIR . $relative_path;
+}
+
+function jigma_bricks_asset_url( string $relative_path ): string {
+	return JIGMA_BRICKS_PLUGIN_URL . $relative_path;
+}
+
+function jigma_bricks_get_asset_version( string $relative_path ): string {
+	$path = jigma_bricks_asset_path( $relative_path );
+
+	return is_readable( $path ) ? (string) filemtime( $path ) : JIGMA_BRICKS_VERSION;
+}
+
+function jigma_bricks_missing_asset_files(): array {
+	$missing = array();
+
+	foreach ( jigma_bricks_required_asset_files() as $label => $relative_path ) {
+		if ( ! is_readable( jigma_bricks_asset_path( $relative_path ) ) ) {
+			$missing[ $label ] = $relative_path;
+		}
+	}
+
+	return $missing;
+}
+
+function jigma_bricks_register_development_error( string $message ): void {
+	$GLOBALS['jigma_bricks_development_errors'][] = $message;
+	add_action( 'admin_footer', 'jigma_bricks_render_development_errors' );
+	add_action( 'wp_footer', 'jigma_bricks_render_development_errors' );
+}
+
+function jigma_bricks_render_development_errors(): void {
+	static $rendered = false;
+
+	if ( $rendered ) {
+		return;
+	}
+
+	$errors = isset( $GLOBALS['jigma_bricks_development_errors'] ) && is_array( $GLOBALS['jigma_bricks_development_errors'] )
+		? array_unique( array_map( 'sanitize_text_field', $GLOBALS['jigma_bricks_development_errors'] ) )
+		: array();
+
+	if ( empty( $errors ) ) {
+		return;
+	}
+
+	$rendered = true;
+
+	?>
+	<div id="jigma-bricks-root" class="jigma-root" style="position:fixed;right:16px;bottom:16px;z-index:999999;background:#070a13;color:#f8fafc;border:1px solid #8b5cf6;border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.45);font:13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:420px;padding:14px;">
+		<strong><?php esc_html_e( 'Jigma development error', 'jigma-bricks' ); ?></strong>
+		<ul style="margin:8px 0 0 18px;padding:0;">
+			<?php foreach ( $errors as $error ) : ?>
+				<li><?php echo esc_html( $error ); ?></li>
+			<?php endforeach; ?>
+		</ul>
+	</div>
+	<?php
+}
+
 function jigma_bricks_enqueue_assets(): void {
-	if ( ! jigma_bricks_is_builder_context() ) {
+	$context = jigma_bricks_detect_builder_context();
+
+	if ( ! $context['detected'] ) {
 		return;
 	}
 
 	$post_id         = jigma_bricks_get_builder_post_id();
 	$current_content = $post_id > 0 ? jigma_bricks_get_current_content( $post_id ) : array();
+	$assets          = jigma_bricks_required_asset_files();
+	$missing_assets  = jigma_bricks_missing_asset_files();
+
+	if ( ! empty( $missing_assets ) ) {
+		jigma_bricks_register_development_error(
+			sprintf(
+				/* translators: %s is a comma-separated list of missing plugin asset files. */
+				__( 'Missing required Jigma asset file(s): %s', 'jigma-bricks' ),
+				implode( ', ', array_values( $missing_assets ) )
+			)
+		);
+		return;
+	}
 
 	wp_enqueue_style(
 		'jigma-bricks-panel',
-		JIGMA_BRICKS_PLUGIN_URL . 'assets/jigma-bricks.css',
+		jigma_bricks_asset_url( $assets['css'] ),
 		array(),
-		JIGMA_BRICKS_VERSION
+		jigma_bricks_get_asset_version( $assets['css'] )
 	);
 
 	wp_enqueue_script(
 		'jigma-core',
-		JIGMA_BRICKS_PLUGIN_URL . 'assets/jigma-core.js',
+		jigma_bricks_asset_url( $assets['core'] ),
 		array(),
-		JIGMA_BRICKS_VERSION,
+		jigma_bricks_get_asset_version( $assets['core'] ),
 		true
 	);
 
 	wp_enqueue_script(
 		'jigma-bricks-panel',
-		JIGMA_BRICKS_PLUGIN_URL . 'assets/jigma-bricks.js',
+		jigma_bricks_asset_url( $assets['panel'] ),
 		array( 'jigma-core' ),
-		JIGMA_BRICKS_VERSION,
+		jigma_bricks_get_asset_version( $assets['panel'] ),
 		true
 	);
 
@@ -144,6 +329,7 @@ function jigma_bricks_enqueue_assets(): void {
 			'ajaxUrl'             => admin_url( 'admin-ajax.php' ),
 			'bricksActive'         => jigma_bricks_is_bricks_active(),
 			'builderContext'       => true,
+			'debug'                => (bool) $context['debug'],
 			'insertNonce'          => wp_create_nonce( 'jigma_bricks_insert' ),
 			'postId'               => $post_id,
 			'contentHash'          => jigma_bricks_content_hash( $current_content ),
@@ -159,9 +345,44 @@ function jigma_bricks_enqueue_assets(): void {
 			'panelSubtitle'        => __( 'HTML/CSS/JS to Bricks structure', 'jigma-bricks' ),
 		)
 	);
+
+	if ( $context['debug'] ) {
+		wp_add_inline_script(
+			'jigma-bricks-panel',
+			'window.JigmaBricksDiagnostics = ' . wp_json_encode(
+				array(
+					'phpEnqueued'       => true,
+					'builderDetected'   => (bool) $context['builderSignal'],
+					'coreLoaded'        => false,
+					'configLoaded'      => true,
+					'mounted'           => false,
+					'rootFound'         => false,
+					'workspaceDetected' => false,
+					'dockState'         => 'pending',
+					'pluginVersion'     => JIGMA_BRICKS_VERSION,
+					'errors'            => array(),
+				)
+			) . ';',
+			'before'
+		);
+	}
 }
-add_action( 'admin_enqueue_scripts', 'jigma_bricks_enqueue_assets' );
-add_action( 'wp_enqueue_scripts', 'jigma_bricks_enqueue_assets' );
+add_action( 'admin_enqueue_scripts', 'jigma_bricks_enqueue_assets', 20 );
+add_action( 'wp_enqueue_scripts', 'jigma_bricks_enqueue_assets', 20 );
+
+function jigma_bricks_enqueue_debug_hint(): void {
+	if ( jigma_bricks_is_builder_context() ) {
+		return;
+	}
+
+	if ( '1' === jigma_bricks_get_request_value( 'jigma_debug' ) && is_user_logged_in() ) {
+		jigma_bricks_register_development_error(
+			__( 'Jigma debug requested, but this user cannot edit the current post or Bricks is not available in this request.', 'jigma-bricks' )
+		);
+	}
+}
+add_action( 'admin_footer', 'jigma_bricks_enqueue_debug_hint' );
+add_action( 'wp_footer', 'jigma_bricks_enqueue_debug_hint' );
 
 function jigma_bricks_get_builder_post_id(): int {
 	$query_keys = array( 'post', 'post_id', 'p', 'page_id', 'bricks_preview', 'bricks_post_id' );

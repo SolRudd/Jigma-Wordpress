@@ -1,5 +1,14 @@
 # Changelog
 
+## Jigma Bricks real-builder loading fix - 2026-06-22
+
+- Bumped the WordPress plugin beta to `0.2.2-beta`.
+- Updated the Plugin URI to `https://jigma.co.uk/`.
+- Broadened Bricks builder detection to support Bricks helper functions, frontend builder request parameters such as `?bricks=run`, Bricks-prefixed query keys, and authorised `jigma_debug=1`.
+- Added required asset file checks, visible development errors for missing plugin assets, and `filemtime()` beta cache-busting for plugin CSS and JavaScript.
+- Hardened dock bootstrap so `#jigma-bricks-root` mounts after `document.body`, shows the bottom fallback dock before workspace detection, and renders a visible Jigma error launcher on initialization failure.
+- Added debug-only `window.JigmaBricksDiagnostics` without exposing nonces, content, source code, or private data.
+
 ## Jigma Bricks dock and settings beta - 2026-06-22
 
 - Bumped the WordPress plugin beta to `0.2.1-beta`.

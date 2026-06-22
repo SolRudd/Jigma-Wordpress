@@ -7,12 +7,46 @@
   var SAVED_SECTIONS_KEY = "jigma_bricks_saved_sections_v1";
   var SCHEMA_VERSION = "bricks-compatibility.v1";
 
-  if (window.JigmaBricksPanelLoaded || document.getElementById(ROOT_ID)) {
+  var config = window.JigmaBricksPlugin || {};
+  var debugMode = Boolean(config.debug || window.JigmaBricksDiagnostics);
+  var diagnostics = debugMode
+    ? (window.JigmaBricksDiagnostics = window.JigmaBricksDiagnostics || {
+      phpEnqueued: false,
+      builderDetected: false,
+      coreLoaded: false,
+      configLoaded: false,
+      mounted: false,
+      rootFound: false,
+      workspaceDetected: false,
+      dockState: "pending",
+      pluginVersion: "",
+      errors: [],
+    })
+    : null;
+  var initStage = "bootstrap";
+
+  function setDiagnostics(values) {
+    if (!diagnostics) return;
+    Object.keys(values).forEach(function (key) {
+      diagnostics[key] = values[key];
+    });
+  }
+
+  setDiagnostics({
+    configLoaded: Boolean(window.JigmaBricksPlugin),
+    coreLoaded: Boolean(window.JigmaCore && typeof window.JigmaCore.convertToBricksCompatibility === "function"),
+    pluginVersion: config.version || "",
+  });
+
+  if (document.getElementById(ROOT_ID) || window.JigmaBricksPanelLoaded) {
+    setDiagnostics({
+      mounted: Boolean(document.getElementById(ROOT_ID)),
+      rootFound: Boolean(document.getElementById(ROOT_ID)),
+    });
     return;
   }
   window.JigmaBricksPanelLoaded = true;
 
-  var config = window.JigmaBricksPlugin || {};
   var contentSummary = Array.isArray(config.contentSummary) ? config.contentSummary : [];
   var contentById = new Map(contentSummary.map(function (element) {
     return [String(element.id), element];
@@ -42,11 +76,105 @@
     return node;
   }
 
+  function setInitStage(stage) {
+    initStage = stage;
+  }
+
+  function waitForBody(callback) {
+    if (document.body) {
+      callback();
+      return;
+    }
+
+    var done = false;
+    function finish() {
+      if (done || !document.body) return;
+      done = true;
+      callback();
+    }
+
+    document.addEventListener("DOMContentLoaded", finish, { once: true });
+    var attempts = 0;
+    var timer = window.setInterval(function () {
+      attempts += 1;
+      if (document.body || attempts > 120) {
+        window.clearInterval(timer);
+        finish();
+      }
+    }, 50);
+  }
+
+  function reportInitializationError(stage, error) {
+    var message = error && error.message ? error.message : String(error || "Unknown initialization error.");
+    console.error("[Jigma] initialization failed at " + stage, error);
+    if (diagnostics) {
+      diagnostics.errors = Array.isArray(diagnostics.errors) ? diagnostics.errors : [];
+      diagnostics.errors.push({ stage: stage, message: message });
+      diagnostics.mounted = false;
+      diagnostics.rootFound = Boolean(document.getElementById(ROOT_ID));
+    }
+    renderInitializationError(stage, message);
+  }
+
+  function renderInitializationError(stage, message) {
+    waitForBody(function () {
+      var root = document.getElementById(ROOT_ID) || el("div", "jigma-root");
+      root.id = ROOT_ID;
+      root.classList.add("jigma-root");
+      if (!root.parentNode && document.body) {
+        document.body.appendChild(root);
+      }
+
+      var launcher = root.querySelector(".jigma-launcher--error") || el("button", "jigma-launcher jigma-launcher--error", "Jigma error");
+      var errorPanel = root.querySelector(".jigma-init-error") || el("section", "jigma-init-error");
+      launcher.type = "button";
+      launcher.hidden = false;
+      launcher.addEventListener("click", function () {
+        errorPanel.hidden = !errorPanel.hidden;
+      });
+      errorPanel.hidden = false;
+      errorPanel.innerHTML = "";
+      errorPanel.appendChild(el("strong", "", "Jigma initialization failed"));
+      errorPanel.appendChild(el("p", "", "Stage: " + stage));
+      errorPanel.appendChild(el("p", "", message));
+      if (!launcher.parentNode) root.appendChild(launcher);
+      if (!errorPanel.parentNode) root.appendChild(errorPanel);
+      setDiagnostics({ rootFound: true, dockState: "error" });
+    });
+  }
+
   function safeJsonParse(value, fallback) {
     try {
       return JSON.parse(value);
     } catch (error) {
       return fallback;
+    }
+  }
+
+  function storageGet(key) {
+    try {
+      return window.localStorage ? window.localStorage.getItem(key) : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      if (window.localStorage) window.localStorage.setItem(key, value);
+    } catch (error) {
+      if (diagnostics) {
+        diagnostics.errors = Array.isArray(diagnostics.errors) ? diagnostics.errors : [];
+        diagnostics.errors.push({ stage: "storage", message: "Unable to persist Jigma UI state." });
+      }
+    }
+  }
+
+  function storageRemove(key) {
+    try {
+      if (window.localStorage) window.localStorage.removeItem(key);
+    } catch (error) {
+      return;
     }
   }
 
@@ -70,6 +198,27 @@
     };
   }
 
+  function isValidStoredUi(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (value.dockState && ["expanded", "collapsed", "hidden"].indexOf(value.dockState) === -1) return false;
+    if (value.dockHeight !== undefined && (!Number.isFinite(Number(value.dockHeight)) || Number(value.dockHeight) < 120)) return false;
+    if (value.activeEditor && ["html", "css", "js"].indexOf(value.activeEditor) === -1) return false;
+    if (value.visibleEditors && (typeof value.visibleEditors !== "object" || Array.isArray(value.visibleEditors))) return false;
+    if (value.editorWidths && (typeof value.editorWidths !== "object" || Array.isArray(value.editorWidths))) return false;
+    return true;
+  }
+
+  function readStoredUi() {
+    var raw = storageGet(UI_KEY);
+    if (!raw) return defaultUi;
+    var parsed = safeJsonParse(raw, null);
+    if (!isValidStoredUi(parsed)) {
+      storageRemove(UI_KEY);
+      return defaultUi;
+    }
+    return parsed;
+  }
+
   function normalizeVisibility(visible) {
     var next = {
       html: visible.html !== false,
@@ -82,13 +231,13 @@
     return next;
   }
 
-  var ui = mergeUi(safeJsonParse(localStorage.getItem(UI_KEY), defaultUi));
-  if (!ui.openExpandedOnLoad && !localStorage.getItem(UI_KEY)) {
+  var ui = mergeUi(readStoredUi());
+  if (!ui.openExpandedOnLoad && !storageGet(UI_KEY)) {
     ui.dockState = "collapsed";
   }
 
   var restoredWorkspace = ui.restoreLastWorkspace
-    ? safeJsonParse(localStorage.getItem(WORKSPACE_KEY), {})
+    ? safeJsonParse(storageGet(WORKSPACE_KEY), {})
     : {};
 
   var state = {
@@ -112,12 +261,12 @@
 
   function persistUi() {
     ui.visibleEditors = normalizeVisibility(ui.visibleEditors);
-    localStorage.setItem(UI_KEY, JSON.stringify(ui));
+    storageSet(UI_KEY, JSON.stringify(ui));
   }
 
   function persistWorkspace() {
     if (!ui.restoreLastWorkspace) return;
-    localStorage.setItem(WORKSPACE_KEY, JSON.stringify({
+    storageSet(WORKSPACE_KEY, JSON.stringify({
       html: state.html,
       css: state.css,
       js: state.js,
@@ -125,13 +274,13 @@
   }
 
   function readSavedSections() {
-    return safeJsonParse(localStorage.getItem(SAVED_SECTIONS_KEY) || "[]", []).filter(function (item) {
+    return safeJsonParse(storageGet(SAVED_SECTIONS_KEY) || "[]", []).filter(function (item) {
       return item && typeof item === "object";
     });
   }
 
   function writeSavedSections(items) {
-    localStorage.setItem(SAVED_SECTIONS_KEY, JSON.stringify(items));
+    storageSet(SAVED_SECTIONS_KEY, JSON.stringify(items));
   }
 
   function currentSource(name) {
@@ -321,9 +470,11 @@
         fallback: false,
       };
       nodes.root.dataset.workspace = "detected";
+      setDiagnostics({ workspaceDetected: true });
     } else {
       bounds = panelBoundsFallback();
       nodes.root.dataset.workspace = "fallback";
+      setDiagnostics({ workspaceDetected: false });
     }
 
     nodes.root.style.setProperty("--jigma-left", Math.round(bounds.left) + "px");
@@ -523,11 +674,16 @@
   }
 
   function syncDockState() {
+    if (["expanded", "collapsed", "hidden"].indexOf(ui.dockState) === -1) {
+      ui.dockState = "expanded";
+      persistUi();
+    }
     nodes.dock.classList.toggle("is-collapsed", ui.dockState === "collapsed");
     nodes.dock.classList.toggle("is-hidden", ui.dockState === "hidden");
     nodes.launcher.hidden = ui.dockState !== "hidden";
     nodes.collapse.setAttribute("aria-expanded", ui.dockState === "expanded" ? "true" : "false");
     nodes.dock.style.setProperty("--jigma-dock-height", Math.max(180, Math.min(ui.dockHeight, Math.round(window.innerHeight * 0.65))) + "px");
+    setDiagnostics({ dockState: ui.dockState, rootFound: Boolean(nodes.root), mounted: Boolean(nodes.root) });
   }
 
   function setActiveEditor(kind) {
@@ -1110,7 +1266,7 @@
     var section = settingsSection("Tools", []);
     var quickImport = el("button", "jigma-button", "Quick Import");
     var saved = el("button", "jigma-button", "Saved Sections");
-    var reset = el("button", "jigma-button", "Reset Jigma");
+    var reset = el("button", "jigma-button", "Reset Jigma UI");
     quickImport.type = saved.type = reset.type = "button";
     quickImport.addEventListener("click", openQuickImportModal);
     saved.addEventListener("click", function () {
@@ -1120,7 +1276,8 @@
       renderReviewDrawer();
     });
     reset.addEventListener("click", function () {
-      localStorage.removeItem(UI_KEY);
+      storageRemove(UI_KEY);
+      storageRemove(WORKSPACE_KEY);
       ui = mergeUi(defaultUi);
       persistUi();
       syncDockState();
@@ -1176,6 +1333,7 @@
   }
 
   function mountPanel() {
+    setInitStage("create-root");
     var root = el("div", "jigma-root");
     root.id = ROOT_ID;
     var launcher = el("button", "jigma-launcher", "Jigma");
@@ -1261,10 +1419,14 @@
       if (kind === "js") nodes.jsBadge = editor.badge;
     });
 
+    setInitStage("render-fallback-dock");
     dock.append(resize, toolbar, workspaceNotice, tabs, editorsWrap, gutters, drawer);
     root.append(dock, launcher);
+    setInitStage("append-root");
     document.body.appendChild(root);
+    setDiagnostics({ mounted: true, rootFound: true, dockState: ui.dockState });
 
+    setInitStage("wire-actions");
     run.addEventListener("click", doRun);
     insert.addEventListener("click", doInsert);
     copy.addEventListener("click", doCopy);
@@ -1301,12 +1463,23 @@
     window.addEventListener("message", updateTarget);
     window.setInterval(updateTarget, 1200);
 
+    setInitStage("sync-state");
+    root.dataset.workspace = "fallback";
     syncDockState();
     syncEditors();
     renderReviewDrawer();
-    observeWorkspace();
-    updateDockBounds();
+    window.requestAnimationFrame(function () {
+      try {
+        setInitStage("workspace-detection");
+        observeWorkspace();
+        updateDockBounds();
+      } catch (error) {
+        reportInitializationError("workspace-detection", error);
+      }
+    });
+    setInitStage("target-detection");
     updateTarget();
+    setInitStage("mounted");
   }
 
   function startDockResize(event) {
@@ -1366,9 +1539,16 @@
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mountPanel);
-  } else {
-    mountPanel();
-  }
+  waitForBody(function () {
+    try {
+      setInitStage("mount");
+      setDiagnostics({
+        configLoaded: Boolean(window.JigmaBricksPlugin),
+        coreLoaded: Boolean(window.JigmaCore && typeof window.JigmaCore.convertToBricksCompatibility === "function"),
+      });
+      mountPanel();
+    } catch (error) {
+      reportInitializationError(initStage, error);
+    }
+  });
 })();

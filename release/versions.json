@@ -1,12 +1,12 @@
 {
-  "generatedAt": "2026-06-22T10:53:46Z",
+  "generatedAt": "2026-06-22T13:22:47Z",
   "standalone": {
     "name": "jigma",
     "version": "0.1.0"
   },
   "plugin": {
     "slug": "jigma-bricks",
-    "version": "0.2.1-beta",
+    "version": "0.2.2-beta",
     "targetBricksVersion": "2.3.7"
   },
   "checks": {

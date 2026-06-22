@@ -5,7 +5,7 @@ Beta WordPress plugin for running Jigma inside a Bricks Builder editing context.
 ## What it does
 
 - Detects Bricks Builder by theme, constants, or loaded Bricks classes.
-- Loads assets only for likely Bricks builder/admin requests.
+- Loads assets only for authorised Bricks builder/admin requests, including frontend builder URLs such as `?bricks=run`.
 - Adds one scoped bottom Jigma dock inside the Bricks workspace with HTML, CSS, and JavaScript editors.
 - Uses the bundled shared Jigma Core conversion engine.
 - Generates a Bricks copied-elements payload and copies it to the clipboard.
@@ -26,11 +26,24 @@ Beta WordPress plugin for running Jigma inside a Bricks Builder editing context.
 
 If the dock does not appear, confirm Bricks is active and reload the builder URL. Assets are intentionally enqueued only in detected Bricks builder/admin contexts.
 
+## Loading diagnostics
+
+For a logged-in user who can edit the current post, add `jigma_debug=1` to the Bricks builder URL to force Jigma asset loading and expose safe browser diagnostics:
+
+```text
+window.JigmaBricksDiagnostics
+```
+
+Diagnostics include enqueue status, builder detection status, core/config load state, mount state, workspace detection, dock state, plugin version, and initialization errors. They do not expose nonces, generated content, source code, or private page data.
+
+During beta, plugin CSS and JavaScript use `filemtime()` versions to avoid stale browser or CDN caches. If `assets/jigma-core.js`, `assets/jigma-bricks.js`, or `assets/jigma-bricks.css` is missing, Jigma renders a visible development error instead of failing silently.
+
 ## Dock UI beta
 
 - The dock mounts once under `#jigma-bricks-root` and scopes all plugin styles under that root.
 - Jigma detects the central Bricks workspace bounds and docks to that area so side panels, top bars, and dialogs are not intentionally covered.
 - If the workspace cannot be detected, Jigma shows a fallback warning and uses a safe bottom dock.
+- The fallback dock mounts before workspace detection. Workspace detection runs asynchronously and repositions the dock when it succeeds.
 - Dock state persists locally as expanded, collapsed, or hidden. Hidden mode shows a small launcher.
 - Default dock height is 320px and can be resized between 180px and 65vh.
 - Editors can be shown or hidden from Settings. Wide screens show active editors side by side; narrow screens use editor tabs.
@@ -38,6 +51,7 @@ If the dock does not appear, confirm Bricks is active and reload the builder URL
 - Insert into Selected is the only native insertion action.
 - Copy Bricks Structure remains available for manual paste testing.
 - Saved Sections and the last editor workspace are stored only in browser local storage.
+- Reset Jigma UI clears only `jigma_bricks_ui_v1` and `jigma_bricks_workspace_v1`.
 
 ## Native insertion beta
 
