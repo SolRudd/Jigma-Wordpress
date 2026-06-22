@@ -3339,7 +3339,7 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     "template",
     "source"
   ]);
-  const TEXT_TAGS = /* @__PURE__ */ new Set(["p", "span", "strong", "em", "small", "b", "i", "mark", "li"]);
+  const TEXT_TAGS = /* @__PURE__ */ new Set(["p", "span", "strong", "em", "small", "b", "i", "mark", "li", "blockquote"]);
   const CLASS_OWNED_PHRASING_TAGS = /* @__PURE__ */ new Set([
     "abbr",
     "b",
@@ -3398,7 +3398,8 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     "mark",
     "pre",
     "code",
-    "figure"
+    "figure",
+    "blockquote"
   ]);
   const PRESERVED_ATTRIBUTE_NAMES = /* @__PURE__ */ new Set([
     "decoding",
@@ -3466,6 +3467,15 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
   function escapeHtmlText(value) {
     return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   }
+  function decodeComparableEntities(value) {
+    return value.replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16))).replace(/&#(\d+);/g, (_, decimal) => String.fromCodePoint(Number.parseInt(decimal, 10))).replaceAll("&nbsp;", " ").replaceAll("&amp;", "&").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&quot;", '"').replaceAll("&#39;", "'");
+  }
+  function normalizeComparableText(value) {
+    return decodeComparableEntities(value).replace(/\s+/g, " ").trim();
+  }
+  function stripInlineMarkup(value) {
+    return value.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ");
+  }
   function isPreservedAttribute(name) {
     return PRESERVED_ATTRIBUTE_NAMES.has(name) || name.startsWith("aria-") || name.startsWith("data-");
   }
@@ -3484,10 +3494,25 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       (child) => !HIDDEN_STRUCTURE_TAGS.has(child.tagName) && CLASS_OWNED_PHRASING_TAGS.has(child.tagName) && (getClassNames$1(child).length > 0 || hasClassedPhrasingChild(child))
     );
   }
+  function hasClassBearingPhrasingChild(element) {
+    return element.children.some(
+      (child) => !HIDDEN_STRUCTURE_TAGS.has(child.tagName) && CLASS_OWNED_PHRASING_TAGS.has(child.tagName) && (getClassNames$1(child).length > 0 || Boolean(child.attributes.id) || hasClassBearingPhrasingChild(child))
+    );
+  }
   function shouldPreserveEmptyPhrasingElement(element) {
     return CLASS_OWNED_PHRASING_TAGS.has(element.tagName) && hasOnlyPhrasingContent(element) && !serializeInlineContent(element).trim();
   }
-  function getBricksMapping(element) {
+  function shouldMapPhrasingContainerToText(element, compatibilityProfile) {
+    if (!compatibilityProfile || !hasOnlyPhrasingContent(element) || hasClassBearingPhrasingChild(element)) {
+      return false;
+    }
+    if (!getClassNames$1(element).length && !element.attributes.id && element.tagName !== "blockquote") {
+      return false;
+    }
+    const inlineHtml = serializeInlineContent(element);
+    return inlineHtml.trim().length > 0;
+  }
+  function getBricksMapping(element, compatibilityProfile = false) {
     const tag = element.tagName;
     const text = getOwnText$1(element, 500);
     const hasChildren = hasRenderableChildren(element);
@@ -3523,6 +3548,9 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     }
     if (tag === "svg") {
       return { name: "svg", supported: true };
+    }
+    if (shouldMapPhrasingContainerToText(element, compatibilityProfile)) {
+      return { name: "text-basic", supported: true, semanticTag: tag };
     }
     if (shouldPreserveEmptyPhrasingElement(element)) {
       return { name: "div", supported: true, semanticTag: tag };
@@ -3565,7 +3593,10 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     }
     if (name === "text-basic") {
       settings.text = text;
-      settings.tag = tag;
+      settings.tag = semanticTag ?? tag;
+      if ((semanticTag ?? tag) !== "p") {
+        settings.customTag = semanticTag ?? tag;
+      }
     }
     if (name === "button" || name === "text-link") {
       settings.text = text;
@@ -3574,7 +3605,7 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       settings.tag = semanticTag;
       settings.customTag = semanticTag;
     }
-    if (name === "button" || name === "text-link") {
+    if (name === "button" || name === "text-link" || tag === "a") {
       const href = element.attributes.href;
       if (href) {
         settings.link = {
@@ -3626,6 +3657,204 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     return content.every(
       (element) => (element.parent === 0 || ids.has(element.parent)) && element.children.every((childId) => ids.has(childId))
     );
+  }
+  function collectSourceTextSegments(element, segments = []) {
+    if (HIDDEN_STRUCTURE_TAGS.has(element.tagName) || element.tagName === "svg") {
+      return segments;
+    }
+    const parts = element.contentParts.length > 0 ? element.contentParts : [
+      ...element.textSegments.map((value) => ({ type: "text", value })),
+      ...element.children.map((child) => ({ type: "element", element: child }))
+    ];
+    parts.forEach((part) => {
+      if (part.type === "text") {
+        const text = normalizeComparableText(part.value);
+        if (text) {
+          segments.push(text);
+        }
+        return;
+      }
+      collectSourceTextSegments(part.element, segments);
+    });
+    return segments;
+  }
+  function extractVisibleTextFromSetting(value) {
+    if (typeof value !== "string") {
+      return "";
+    }
+    return normalizeComparableText(stripInlineMarkup(value));
+  }
+  function collectPayloadTextSegments(content) {
+    const byId = new Map(content.map((element) => [element.id, element]));
+    const segments = [];
+    const visit = (element) => {
+      const text = extractVisibleTextFromSetting(element.settings.text);
+      if (text) {
+        segments.push(text);
+      }
+      element.children.forEach((childId) => {
+        const child = byId.get(childId);
+        if (child) {
+          visit(child);
+        }
+      });
+    };
+    content.filter((element) => element.parent === 0).forEach(visit);
+    return segments;
+  }
+  function countOccurrences(haystack, needle) {
+    if (!needle) {
+      return 0;
+    }
+    let count = 0;
+    let index = haystack.indexOf(needle);
+    while (index !== -1) {
+      count += 1;
+      index = haystack.indexOf(needle, index + needle.length);
+    }
+    return count;
+  }
+  function countValues(values) {
+    const counts = /* @__PURE__ */ new Map();
+    values.forEach((value) => counts.set(value, (counts.get(value) ?? 0) + 1));
+    return counts;
+  }
+  function auditSourceTextCoverage(roots, content) {
+    const sourceSegments = roots.flatMap((root) => collectSourceTextSegments(root));
+    const payloadSegments = collectPayloadTextSegments(content);
+    const payloadText = payloadSegments.join(" ");
+    const expectedCounts = countValues(sourceSegments);
+    const payloadExactCounts = countValues(payloadSegments);
+    const missing = [];
+    const duplicated = [];
+    expectedCounts.forEach((expectedCount, segment) => {
+      const actualCount = countOccurrences(payloadText, segment);
+      if (actualCount < expectedCount) {
+        for (let index = actualCount; index < expectedCount; index += 1) {
+          missing.push(segment);
+        }
+      }
+      const exactCount = payloadExactCounts.get(segment) ?? 0;
+      if (exactCount > expectedCount) {
+        for (let index = expectedCount; index < exactCount; index += 1) {
+          duplicated.push(segment);
+        }
+      }
+    });
+    let cursor = 0;
+    const reordered = [];
+    sourceSegments.forEach((segment) => {
+      const index = payloadText.indexOf(segment, cursor);
+      if (index === -1) {
+        if (!missing.includes(segment)) {
+          reordered.push(segment);
+        }
+        return;
+      }
+      cursor = index + segment.length;
+    });
+    return {
+      sourceSegments,
+      missing,
+      duplicated,
+      reordered,
+      valid: missing.length === 0 && duplicated.length === 0 && reordered.length === 0
+    };
+  }
+  function collectSourceHrefs(element, hrefs = []) {
+    if (HIDDEN_STRUCTURE_TAGS.has(element.tagName)) {
+      return hrefs;
+    }
+    if (element.tagName === "a" && element.attributes.href) {
+      hrefs.push(element.attributes.href);
+    }
+    element.children.forEach((child) => collectSourceHrefs(child, hrefs));
+    return hrefs;
+  }
+  function collectPayloadHrefs(content) {
+    return content.map((element) => element.settings.link).filter((link) => Boolean(link) && typeof link === "object").map((link) => typeof link.url === "string" ? link.url : "").filter(Boolean);
+  }
+  function auditHrefCoverage(roots, content) {
+    const sourceHrefs = roots.flatMap((root) => collectSourceHrefs(root));
+    const payloadHrefs = collectPayloadHrefs(content);
+    const payloadCounts = countValues(payloadHrefs);
+    const missing = [];
+    countValues(sourceHrefs).forEach((expectedCount, href) => {
+      const actualCount = payloadCounts.get(href) ?? 0;
+      for (let index = actualCount; index < expectedCount; index += 1) {
+        missing.push(href);
+      }
+    });
+    return {
+      sourceHrefs,
+      missing,
+      valid: missing.length === 0
+    };
+  }
+  function collectSourceImages(element, images = []) {
+    if (HIDDEN_STRUCTURE_TAGS.has(element.tagName)) {
+      return images;
+    }
+    if (element.tagName === "img" && element.attributes.src) {
+      images.push({ src: element.attributes.src, alt: element.attributes.alt });
+    }
+    element.children.forEach((child) => collectSourceImages(child, images));
+    return images;
+  }
+  function collectPayloadImageUrls(content) {
+    return content.map((element) => element.settings.image).filter((image) => Boolean(image) && typeof image === "object").map((image) => typeof image.url === "string" ? image.url : "").filter(Boolean);
+  }
+  function auditImageCoverage(roots, content) {
+    const sourceImages = roots.flatMap((root) => collectSourceImages(root));
+    const payloadUrls = collectPayloadImageUrls(content);
+    const payloadCounts = countValues(payloadUrls);
+    const missing = [];
+    countValues(sourceImages.map((image) => image.src)).forEach((expectedCount, src) => {
+      const actualCount = payloadCounts.get(src) ?? 0;
+      for (let index = actualCount; index < expectedCount; index += 1) {
+        missing.push(src);
+      }
+    });
+    return {
+      sourceImages,
+      missing,
+      valid: missing.length === 0
+    };
+  }
+  const CLIPBOARD_PAYLOAD_KEYS = [
+    "content",
+    "globalClasses",
+    "globalElements",
+    "source",
+    "sourceUrl",
+    "version"
+  ];
+  function validateBricksClipboardPayloadSchema(payload) {
+    const errors = [];
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { valid: false, errors: ["Clipboard payload is not an object."] };
+    }
+    const value = payload;
+    const keys = Object.keys(value).sort();
+    const expectedKeys = [...CLIPBOARD_PAYLOAD_KEYS].sort();
+    if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) {
+      errors.push(`Clipboard payload keys must be exactly ${expectedKeys.join(", ")}.`);
+    }
+    if (!Array.isArray(value.content)) errors.push("content must be an array.");
+    if (!Array.isArray(value.globalClasses)) errors.push("globalClasses must be an array.");
+    if (!Array.isArray(value.globalElements)) errors.push("globalElements must be an array.");
+    if (Array.isArray(value.content) && Array.isArray(value.globalClasses)) {
+      const classIds = new Set(value.globalClasses.filter((entry) => Boolean(entry) && typeof entry === "object").map((entry) => typeof entry.id === "string" ? entry.id : "").filter(Boolean));
+      const referencesValid = value.content.filter((entry) => Boolean(entry) && typeof entry === "object").every((entry) => {
+        var _a;
+        const ids = Array.isArray((_a = entry.settings) == null ? void 0 : _a._cssGlobalClasses) ? entry.settings._cssGlobalClasses.map((id) => `${id}`) : [];
+        return ids.every((id) => classIds.has(id));
+      });
+      if (!referencesValid) {
+        errors.push("All _cssGlobalClasses references must resolve to globalClasses records.");
+      }
+    }
+    return { valid: errors.length === 0, errors };
   }
   function makeClassList(mode, bemClass, originalClasses, warnings, blockName) {
     const validOriginalClasses = originalClasses.filter((className) => {
@@ -4100,7 +4329,7 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         skippedLayerCount += 1;
         return null;
       }
-      const mapping = getBricksMapping(element);
+      const mapping = getBricksMapping(element, compatibilityProfile);
       if (!SUPPORTED_TAGS.has(element.tagName) || !mapping.supported) {
         unsupportedElementCount += 1;
         pushWarning(
@@ -4461,6 +4690,65 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         suggestedAction: "Review the generated hierarchy before paste testing."
       });
     }
+    const sourceTextAudit = auditSourceTextCoverage(parsed.roots, content);
+    if (!sourceTextAudit.valid) {
+      pushGroupedWarning(warnings, {
+        id: "source-content-conservation",
+        code: "source.content_loss",
+        severity: "error",
+        title: "Source text coverage failed",
+        message: "Generated Bricks payload does not preserve all visible source text exactly once in source order.",
+        details: [
+          ...sourceTextAudit.missing.slice(0, 8).map((text) => `Missing: ${text}`),
+          ...sourceTextAudit.duplicated.slice(0, 8).map((text) => `Duplicated: ${text}`),
+          ...sourceTextAudit.reordered.slice(0, 8).map((text) => `Reordered: ${text}`)
+        ],
+        suggestedAction: "Review the generated structure before copying or inserting into Bricks."
+      });
+    }
+    const hrefAudit = auditHrefCoverage(parsed.roots, content);
+    if (!hrefAudit.valid) {
+      pushGroupedWarning(warnings, {
+        id: "source-href-coverage",
+        code: "source.link_loss",
+        severity: "error",
+        title: "Source link coverage failed",
+        message: "Generated Bricks payload does not preserve every source anchor href.",
+        details: hrefAudit.missing.slice(0, 8).map((href) => `Missing href: ${href}`),
+        suggestedAction: "Review link elements before copying or inserting into Bricks."
+      });
+    }
+    const imageAudit = auditImageCoverage(parsed.roots, content);
+    if (!imageAudit.valid) {
+      pushGroupedWarning(warnings, {
+        id: "source-image-coverage",
+        code: "source.image_loss",
+        severity: "error",
+        title: "Source image coverage failed",
+        message: "Generated Bricks payload does not preserve every source image URL.",
+        details: imageAudit.missing.slice(0, 8).map((src) => `Missing image: ${src}`),
+        suggestedAction: "Review image elements before copying or inserting into Bricks."
+      });
+    }
+    const clipboardSchemaAudit = validateBricksClipboardPayloadSchema({
+      content,
+      source: "bricksCopiedElements",
+      sourceUrl: "jigma.local",
+      version: TARGET_BRICKS_VERSION,
+      globalClasses: globalClasses ?? [],
+      globalElements: []
+    });
+    if (!clipboardSchemaAudit.valid) {
+      pushGroupedWarning(warnings, {
+        id: "clipboard-schema",
+        code: "clipboard.invalid_schema",
+        severity: "error",
+        title: "Clipboard payload schema failed",
+        message: "Generated clipboard payload does not match the raw Bricks JSON schema.",
+        details: clipboardSchemaAudit.errors,
+        suggestedAction: "Do not paste this payload into Bricks until the schema is valid."
+      });
+    }
     const mappedRuleCount = elementCss.nativeStyleMappedCount + classCss.nativeStyleMappedCount;
     const fallbackCssCount = elementCss.customCssFallbackCount + classCss.customCssFallbackCount + (shouldCreateScopedCssBlock && scopedCss.css.trim() ? 1 : 0);
     const cssRuleWorkCount = mappedRuleCount + fallbackCssCount + elementCss.unmappedRuleCount + classCss.unmappedRuleCount;
@@ -4573,7 +4861,19 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         actionRequiredWarningCount: finalActionRequiredWarningCount,
         nativeCssMappingPercentage,
         complexityWarningCount: warnings.filter((warning) => warning.code === "conversion.complexity").length,
-        invalidNestingCount: structureValidation.invalidNestingCount
+        invalidNestingCount: structureValidation.invalidNestingCount,
+        sourceTextCount: sourceTextAudit.sourceSegments.length,
+        sourceTextCoverageValid: sourceTextAudit.valid,
+        missingSourceTextCount: sourceTextAudit.missing.length,
+        duplicatedSourceTextCount: sourceTextAudit.duplicated.length,
+        reorderedSourceTextCount: sourceTextAudit.reordered.length,
+        hrefCoverageValid: hrefAudit.valid,
+        sourceHrefCount: hrefAudit.sourceHrefs.length,
+        missingHrefCount: hrefAudit.missing.length,
+        imageCoverageValid: imageAudit.valid,
+        sourceImageCount: imageAudit.sourceImages.length,
+        missingImageCount: imageAudit.missing.length,
+        clipboardSchemaValid: clipboardSchemaAudit.valid
       }
     };
   }
@@ -4586,6 +4886,35 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       globalClasses: exportResult.globalClasses ?? [],
       globalElements: []
     };
+  }
+  function serializeBricksClipboardPayloadJson(exportResult) {
+    return JSON.stringify(serializeBricksClipboardPayload(exportResult));
+  }
+  function getBricksExportBlockingMessages(exportResult) {
+    const messages = [];
+    const validation = exportResult.validation;
+    if (!validation.sourceTextCoverageValid) {
+      messages.push("Visible source text was not fully preserved.");
+    }
+    if (!validation.hrefCoverageValid) {
+      messages.push("One or more source links lost their href.");
+    }
+    if (!validation.imageCoverageValid) {
+      messages.push("One or more source images lost their URL.");
+    }
+    if (!validation.hierarchyValid) {
+      messages.push("Generated hierarchy has invalid parent/child references.");
+    }
+    if (!validation.classReferenceValid) {
+      messages.push("Generated class references do not all resolve.");
+    }
+    if ((validation.invalidNestingCount ?? 0) > 0) {
+      messages.push("Generated output has unsupported non-nestable children.");
+    }
+    if (!validation.clipboardSchemaValid) {
+      messages.push("Clipboard payload schema is invalid.");
+    }
+    return messages;
   }
   const pluginCompatibilityOptions = (input) => ({
     stylingMode: "bem-css",
@@ -4712,16 +5041,24 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       js: input.js,
       options: pluginCompatibilityOptions(input)
     });
+    const blockingErrors = getBricksExportBlockingMessages(exportResult);
     return {
       schemaVersion: BRICKS_COMPATIBILITY_SCHEMA_VERSION,
       targetBricksVersion: TARGET_BRICKS_VERSION,
       payload: serializeBricksClipboardPayload(exportResult),
+      payloadJson: serializeBricksClipboardPayloadJson(exportResult),
       diagnostics: {
         warnings: exportResult.warnings,
+        blocked: blockingErrors.length > 0,
+        blockingErrors,
         elementCount: exportResult.validation.totalElements,
         classCount: exportResult.validation.globalClassCount,
         unsignedJavaScriptCount: exportResult.validation.unsignedJavaScriptCodeCount,
-        unresolvedSelectorCount: exportResult.validation.unresolvedSelectorCount
+        unresolvedSelectorCount: exportResult.validation.unresolvedSelectorCount,
+        missingSourceTextCount: exportResult.validation.missingSourceTextCount ?? 0,
+        duplicatedSourceTextCount: exportResult.validation.duplicatedSourceTextCount ?? 0,
+        missingHrefCount: exportResult.validation.missingHrefCount ?? 0,
+        missingImageCount: exportResult.validation.missingImageCount ?? 0
       },
       pageLevelCss: detectPageLevelCss(input.css)
     };

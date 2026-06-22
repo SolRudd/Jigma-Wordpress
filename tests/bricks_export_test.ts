@@ -7,9 +7,12 @@ import { describe, expect, it } from "vitest";
 import {
   createBricksExport,
   BRICKS_COMPATIBILITY_SCHEMA_VERSION,
+  getBricksExportBlockingMessages,
   serializeBricksClipboardPayload,
+  serializeBricksClipboardPayloadJson,
   serializeJigmaDebugReport,
   TARGET_BRICKS_VERSION,
+  validateBricksClipboardPayloadSchema,
 } from "../lib/bricks/export.ts";
 import {
   convertToBricksCompatibility,
@@ -215,6 +218,40 @@ const bbSystemShellCss = readFileSync(
   new URL("./fixtures/bb-system-shell/source.css", import.meta.url),
   "utf8",
 );
+const bbSystemShellJs = readFileSync(
+  new URL("./fixtures/bb-system-shell/source.js", import.meta.url),
+  "utf8",
+);
+const bbSystemShellExpected = JSON.parse(readFileSync(
+  new URL("./fixtures/bb-system-shell/expected-structure.json", import.meta.url),
+  "utf8",
+)) as {
+  text: string[];
+  hrefs: string[];
+  glyphs: string[];
+  classes: string[];
+};
+const litSocialProofHtml = readFileSync(
+  new URL("./fixtures/lit-social-proof/source.html", import.meta.url),
+  "utf8",
+);
+const litSocialProofCss = readFileSync(
+  new URL("./fixtures/lit-social-proof/source.css", import.meta.url),
+  "utf8",
+);
+const litSocialProofJs = readFileSync(
+  new URL("./fixtures/lit-social-proof/source.js", import.meta.url),
+  "utf8",
+);
+const litSocialProofReference = JSON.parse(readFileSync(
+  new URL("./fixtures/lit-social-proof/working-reference.json", import.meta.url),
+  "utf8",
+)) as {
+  text: string[];
+  hrefs: string[];
+  images: Array<{ src: string; alt: string }>;
+  classes: string[];
+};
 
 const compatibilityOptions: Partial<OutputOptions> = {
   exportProfile: "bricks-compatibility",
@@ -469,6 +506,41 @@ function getElementGlobalClassNames(
     .filter(Boolean);
 }
 
+function normalizePayloadText(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal: string) => String.fromCodePoint(Number.parseInt(decimal, 10)))
+    .replaceAll("&nbsp;", " ")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function payloadVisibleText(result: ReturnType<typeof createBricksExport>) {
+  return result.content
+    .map((element) => typeof element.settings.text === "string"
+      ? normalizePayloadText(element.settings.text)
+      : "")
+    .filter(Boolean)
+    .join(" ");
+}
+
+function countText(haystack: string, needle: string) {
+  let count = 0;
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return count;
+}
+
 describe("Bricks export", () => {
   it("matches the Feature CTA Bricks Compatibility reference structure", () => {
     const result = exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions);
@@ -708,7 +780,7 @@ describe("Bricks export", () => {
   });
 
   it("preserves real bb-system-shell inline content, modifiers, semantics, and responsive class CSS", () => {
-    const result = exportFor(bbSystemShellHtml, bbSystemShellCss, "", compatibilityOptions);
+    const result = exportFor(bbSystemShellHtml, bbSystemShellCss, bbSystemShellJs, compatibilityOptions);
     const clipboard = serializeBricksClipboardPayload(result);
     const root = getElementByBemClass(result, "bb-system-shell")!;
     const eyebrow = getElementByBemClass(result, "bb-system-shell__eyebrow")!;
@@ -722,17 +794,6 @@ describe("Bricks export", () => {
     const links = result.content.filter((element) =>
       element.name === "text-link" && element.settings.text === "→"
     );
-    const eyebrowChildren = result.content.filter((element) => element.parent === eyebrow.id);
-    const preservedEyebrowSpan = eyebrowChildren.find((element) =>
-      element.name === "div" &&
-      element.settings.tag === "span" &&
-      !("text" in element.settings)
-    );
-    const eyebrowText = eyebrowChildren.find((element) =>
-      element.name === "text-basic" &&
-      element.settings.tag === "span" &&
-      element.settings.text === "02 · SYSTEMS BUILT TO SCALE"
-    );
     const classIds = new Set((result.globalClasses ?? []).map((entry) => entry.id));
     const referencedClassIds = result.content.flatMap((element) =>
       Array.isArray(element.settings._cssGlobalClasses)
@@ -740,12 +801,16 @@ describe("Bricks export", () => {
         : []
     );
     const contentJson = JSON.stringify(result.content);
+    const visibleText = payloadVisibleText(result);
 
     expect(root.name).toBe("section");
     expect(root.parent).toBe(0);
-    expect(preservedEyebrowSpan).toBeDefined();
-    expect(eyebrowText).toBeDefined();
-    expect(eyebrow.children).toEqual([preservedEyebrowSpan!.id, eyebrowText!.id]);
+    expect(eyebrow.name).toBe("text-basic");
+    expect(eyebrow.children).toEqual([]);
+    expect(eyebrow.settings.tag).toBe("div");
+    expect(eyebrow.settings.customTag).toBe("div");
+    expect(eyebrow.settings.text).toContain("<span></span>");
+    expect(eyebrow.settings.text).toContain("02 · SYSTEMS BUILT TO SCALE");
     expect(getGlobalClassCss(result, "bb-system-shell__eyebrow")).toContain(".bb-system-shell__eyebrow span");
 
     expect(heading.name).toBe("heading");
@@ -761,15 +826,17 @@ describe("Bricks export", () => {
     ]);
     expect(getGlobalClassCss(result, "bb-system-card--active")).toContain(".bb-system-card--active");
     expect(getGlobalClassCss(result, "bb-system-card--active")).toContain("@media (max-width: 900px)");
-    expect(result.content.find((element) =>
-      element.parent === cardLabel.id &&
-      element.name === "text-basic" &&
-      element.settings.text === "Core Focus"
-    )).toBeDefined();
+    expect(cardLabel.name).toBe("text-basic");
+    expect(cardLabel.settings.text).toBe("Core Focus");
 
-    ["▣", "ϟ", "▦", "↗", "◈", "◎", "→"].forEach((glyph) => {
+    bbSystemShellExpected.glyphs.forEach((glyph) => {
       expect(contentJson).toContain(glyph);
     });
+    bbSystemShellExpected.text.forEach((text) => {
+      expect(visibleText).toContain(text);
+    });
+    expect(countText(visibleText, "02 · SYSTEMS BUILT TO SCALE")).toBe(1);
+    expect(countText(visibleText, "Core Focus")).toBe(1);
     expect(links).toHaveLength(3);
     links.forEach((link) => {
       expect(link.settings.link).toEqual({ type: "internal", url: "#" });
@@ -790,12 +857,132 @@ describe("Bricks export", () => {
     expect(getGlobalClassCss(result, "bb-system-shell__heading")).toContain("@media (max-width: 560px)");
     expect(getGlobalClassCss(result, "bb-system-stats")).toContain("@media (max-width: 900px)");
     expect(getGlobalClassCss(result, "bb-system-stats")).toContain("@media (max-width: 560px)");
+    expect(result.validation.sourceTextCoverageValid).toBe(true);
+    expect(result.validation.sourceTextCount).toBeGreaterThan(0);
+    expect(result.validation.missingSourceTextCount).toBe(0);
+    expect(result.validation.duplicatedSourceTextCount).toBe(0);
+    expect(result.validation.hrefCoverageValid).toBe(true);
+    expect(result.validation.missingHrefCount).toBe(0);
+    expect(getBricksExportBlockingMessages(result)).toEqual([]);
     expect(result.validation.classReferenceValid).toBe(true);
     expect(result.validation.missingClassReferenceCount).toBe(0);
     expect(referencedClassIds.every((id) => classIds.has(id))).toBe(true);
     expect(result.content.every((element) => !("_cssClasses" in element.settings))).toBe(true);
     expect(clipboard.globalClasses).toHaveLength(result.globalClasses?.length ?? 0);
     expect(clipboard.content).toHaveLength(result.content.length);
+  });
+
+  it("preserves lit-social-proof source content, links, images, dots, and clipboard schema", () => {
+    const result = exportFor(litSocialProofHtml, litSocialProofCss, litSocialProofJs, compatibilityOptions);
+    const payload = serializeBricksClipboardPayload(result);
+    const rawJson = serializeBricksClipboardPayloadJson(result);
+    const parsed = JSON.parse(rawJson);
+    const visibleText = payloadVisibleText(result);
+    const allCss = getAllClassCustomCss(result);
+    const classIds = new Set((result.globalClasses ?? []).map((entry) => entry.id));
+    const referencedClassIds = result.content.flatMap((element) =>
+      Array.isArray(element.settings._cssGlobalClasses)
+        ? element.settings._cssGlobalClasses.map((id) => `${id}`)
+        : []
+    );
+    const quoteElements = getElementsByBemClass(result, "lit-review__quote");
+    const reviewArticles = getElementsByBemClass(result, "lit-review");
+    const insightArticles = getElementsByBemClass(result, "lit-insight");
+    const arrowButtons = getElementsByBemClass(result, "lit-review-slider__arrow");
+    const dots = getElementByBemClass(result, "lit-review-slider__dots")!;
+    const dotChildren = result.content.filter((element) => element.parent === dots.id);
+    const images = getElementsByBemClass(result, "lit-insight__image");
+    const insightLinks = getElementsByBemClass(result, "lit-insight__link");
+
+    expect(rawJson.trim()[0]).toBe("{");
+    expect(Object.keys(parsed).sort()).toEqual([
+      "content",
+      "globalClasses",
+      "globalElements",
+      "source",
+      "sourceUrl",
+      "version",
+    ]);
+    expect(validateBricksClipboardPayloadSchema(parsed).valid).toBe(true);
+    expect(payload).toEqual(parsed);
+    expect(JSON.stringify(parsed)).not.toContain("jigmaMeta");
+    expect(JSON.stringify(parsed)).not.toContain("validation");
+    expect(JSON.stringify(parsed)).not.toContain("warnings");
+
+    litSocialProofReference.text.forEach((text) => {
+      expect(visibleText).toContain(text);
+    });
+    expect(countText(visibleText, "What Our Clients Say")).toBe(1);
+    expect(countText(visibleText, "Latest Insights")).toBe(1);
+    expect(countText(visibleText, "“")).toBe(2);
+    expect(countText(visibleText, "Jigma kept our launch moving without trading away detail.")).toBe(1);
+    expect(countText(visibleText, "We pasted into Bricks and the hierarchy finally made sense.")).toBe(1);
+    expect(countText(visibleText, "Ava Lee")).toBe(1);
+    expect(countText(visibleText, "Marcus Stone")).toBe(1);
+
+    expect(quoteElements).toHaveLength(2);
+    quoteElements.forEach((quote) => {
+      expect(quote.name).toBe("text-basic");
+      expect(quote.settings.tag).toBe("blockquote");
+      expect(quote.settings.customTag).toBe("blockquote");
+    });
+    expect([...reviewArticles, ...insightArticles]).toHaveLength(4);
+    [...reviewArticles, ...insightArticles].forEach((article) => {
+      expect(article.settings.tag).toBe("article");
+      expect(article.settings.customTag).toBe("article");
+    });
+
+    expect(arrowButtons).toHaveLength(2);
+    expect(arrowButtons.map((button) => button.settings._attributes).flat()).toEqual(
+      expect.arrayContaining([
+        { name: "aria-label", value: "Previous testimonial" },
+        { name: "aria-label", value: "Next testimonial" },
+      ]),
+    );
+    expect(visibleText).toContain("←");
+    expect(visibleText).toContain("→");
+    expect(dotChildren).toHaveLength(3);
+    dotChildren.forEach((dot) => {
+      expect(dot.name).toBe("div");
+      expect(dot.settings.tag).toBe("span");
+      expect(dot.settings.customTag).toBe("span");
+      expect(dot.settings.text).toBeUndefined();
+    });
+
+    expect(images).toHaveLength(2);
+    litSocialProofReference.images.forEach((image) => {
+      const element = images.find((candidate) =>
+        (candidate.settings.image as { url?: string } | undefined)?.url === image.src
+      );
+      expect(element).toBeDefined();
+      expect(element?.settings.altText).toBe(image.alt);
+      expect(element?.settings.width).toBe(640);
+      expect(element?.settings.height).toBe(420);
+      expect(element?.settings.loading).toBe("lazy");
+      expect(element?.settings.decoding).toBe("async");
+    });
+    expect(insightLinks).toHaveLength(2);
+    expect(insightLinks.map((link) => (link.settings.link as { url?: string })?.url))
+      .toEqual(litSocialProofReference.hrefs);
+    insightLinks.forEach((link) => {
+      expect(link.settings.text).toContain("Read more");
+      expect(link.settings.text).toContain("<span aria-hidden=\"true\">→</span>");
+    });
+
+    expect(allCss).toContain(".lit-review-slider__dots span.is-active");
+    litSocialProofReference.classes.forEach((className) => {
+      expect(getGlobalClass(result, className)).toBeDefined();
+    });
+    expect(result.validation.sourceTextCoverageValid).toBe(true);
+    expect(result.validation.missingSourceTextCount).toBe(0);
+    expect(result.validation.duplicatedSourceTextCount).toBe(0);
+    expect(result.validation.hrefCoverageValid).toBe(true);
+    expect(result.validation.missingHrefCount).toBe(0);
+    expect(result.validation.imageCoverageValid).toBe(true);
+    expect(result.validation.missingImageCount).toBe(0);
+    expect(result.validation.clipboardSchemaValid).toBe(true);
+    expect(getBricksExportBlockingMessages(result)).toEqual([]);
+    expect(referencedClassIds.every((id) => classIds.has(id))).toBe(true);
   });
 
   it("defines the standalone HTML, CSS, and review-required JavaScript editors", () => {
@@ -3067,6 +3254,11 @@ describe("Bricks export", () => {
     expect(plugin.schemaVersion).toBe(BRICKS_COMPATIBILITY_SCHEMA_VERSION);
     expect(plugin.targetBricksVersion).toBe(TARGET_BRICKS_VERSION);
     expect(plugin.payload).toEqual(standalone);
+    expect(plugin.payloadJson).toBe(JSON.stringify(standalone));
+    expect(plugin.payloadJson.trim()[0]).toBe("{");
+    expect(validateBricksClipboardPayloadSchema(JSON.parse(plugin.payloadJson)).valid).toBe(true);
+    expect(plugin.diagnostics.blocked).toBe(false);
+    expect(plugin.diagnostics.blockingErrors).toEqual([]);
     expect(Object.keys(plugin.payload).sort()).toEqual([
       "content",
       "globalClasses",

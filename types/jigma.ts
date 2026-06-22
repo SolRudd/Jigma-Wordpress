@@ -228,6 +228,18 @@ export interface BricksExportValidation {
   nativeCssMappingPercentage?: number;
   complexityWarningCount?: number;
   invalidNestingCount?: number;
+  sourceTextCount?: number;
+  sourceTextCoverageValid?: boolean;
+  missingSourceTextCount?: number;
+  duplicatedSourceTextCount?: number;
+  reorderedSourceTextCount?: number;
+  hrefCoverageValid?: boolean;
+  sourceHrefCount?: number;
+  missingHrefCount?: number;
+  imageCoverageValid?: boolean;
+  sourceImageCount?: number;
+  missingImageCount?: number;
+  clipboardSchemaValid?: boolean;
 }
 
 export interface BricksClassAuditEntry {

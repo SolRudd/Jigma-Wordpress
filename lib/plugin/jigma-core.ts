@@ -1,7 +1,9 @@
 import {
   BRICKS_COMPATIBILITY_SCHEMA_VERSION,
   createBricksExport,
+  getBricksExportBlockingMessages,
   serializeBricksClipboardPayload,
+  serializeBricksClipboardPayloadJson,
   TARGET_BRICKS_VERSION,
 } from "../bricks/export.ts";
 import type { ConversionWarning, OutputOptions } from "../../types/jigma.ts";
@@ -31,12 +33,19 @@ export interface JigmaPluginCoreResult {
   schemaVersion: typeof BRICKS_COMPATIBILITY_SCHEMA_VERSION;
   targetBricksVersion: typeof TARGET_BRICKS_VERSION;
   payload: ReturnType<typeof serializeBricksClipboardPayload>;
+  payloadJson: string;
   diagnostics: {
     warnings: ConversionWarning[];
+    blocked: boolean;
+    blockingErrors: string[];
     elementCount: number;
     classCount: number;
     unsignedJavaScriptCount: number;
     unresolvedSelectorCount: number;
+    missingSourceTextCount: number;
+    duplicatedSourceTextCount: number;
+    missingHrefCount: number;
+    missingImageCount: number;
   };
   pageLevelCss: PageLevelCssReview;
 }
@@ -190,17 +199,25 @@ export function convertToBricksCompatibility(input: JigmaPluginCoreInput): Jigma
     js: input.js,
     options: pluginCompatibilityOptions(input),
   });
+  const blockingErrors = getBricksExportBlockingMessages(exportResult);
 
   return {
     schemaVersion: BRICKS_COMPATIBILITY_SCHEMA_VERSION,
     targetBricksVersion: TARGET_BRICKS_VERSION,
     payload: serializeBricksClipboardPayload(exportResult),
+    payloadJson: serializeBricksClipboardPayloadJson(exportResult),
     diagnostics: {
       warnings: exportResult.warnings,
+      blocked: blockingErrors.length > 0,
+      blockingErrors,
       elementCount: exportResult.validation.totalElements,
       classCount: exportResult.validation.globalClassCount,
       unsignedJavaScriptCount: exportResult.validation.unsignedJavaScriptCodeCount,
       unresolvedSelectorCount: exportResult.validation.unresolvedSelectorCount,
+      missingSourceTextCount: exportResult.validation.missingSourceTextCount ?? 0,
+      duplicatedSourceTextCount: exportResult.validation.duplicatedSourceTextCount ?? 0,
+      missingHrefCount: exportResult.validation.missingHrefCount ?? 0,
+      missingImageCount: exportResult.validation.missingImageCount ?? 0,
     },
     pageLevelCss: detectPageLevelCss(input.css),
   };

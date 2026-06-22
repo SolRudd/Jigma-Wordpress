@@ -637,7 +637,69 @@
   }
 
   function minimalPayload(result) {
-    return JSON.stringify(result.payload, null, 2);
+    return result.payloadJson || JSON.stringify(result.payload);
+  }
+
+  function validateClipboardPayload(payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return { valid: false, message: "Clipboard payload is not an object." };
+    }
+    var keys = Object.keys(payload).sort();
+    var expected = ["content", "globalClasses", "globalElements", "source", "sourceUrl", "version"].sort();
+    if (JSON.stringify(keys) !== JSON.stringify(expected)) {
+      return { valid: false, message: "Clipboard payload keys are invalid." };
+    }
+    if (!Array.isArray(payload.content) || !Array.isArray(payload.globalClasses) || !Array.isArray(payload.globalElements)) {
+      return { valid: false, message: "Clipboard payload arrays are invalid." };
+    }
+    var classIds = new Set(payload.globalClasses.map(function (entry) {
+      return String(entry.id || "");
+    }).filter(Boolean));
+    var referencesValid = payload.content.every(function (element) {
+      var ids = element && element.settings && Array.isArray(element.settings._cssGlobalClasses)
+        ? element.settings._cssGlobalClasses
+        : [];
+      return ids.every(function (id) { return classIds.has(String(id)); });
+    });
+    if (!referencesValid) {
+      return { valid: false, message: "Clipboard payload has unresolved class references." };
+    }
+    return { valid: true, message: "" };
+  }
+
+  function validateClipboardText(text) {
+    if (!String(text || "").trim().startsWith("{")) {
+      return { valid: false, message: "Clipboard payload must be raw JSON." };
+    }
+    try {
+      return validateClipboardPayload(JSON.parse(text));
+    } catch (error) {
+      return { valid: false, message: "Clipboard payload is not valid JSON." };
+    }
+  }
+
+  function writeClipboardText(text) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      return navigator.clipboard.writeText(text);
+    }
+
+    return new Promise(function (resolve, reject) {
+      try {
+        var textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "readonly");
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        textarea.style.top = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        var copied = document.execCommand("copy");
+        textarea.remove();
+        copied ? resolve() : reject(new Error("Clipboard permission denied."));
+      } catch (error) {
+        reject(error);
+      }
+    });
   }
 
   function formatSource(kind, value) {
@@ -790,6 +852,10 @@
       state.statusKind = "target";
       return "Target selected";
     }
+    if (state.lastRun.diagnostics && state.lastRun.diagnostics.blocked) {
+      state.statusKind = "blocked";
+      return state.lastRun.diagnostics.blockingErrors[0] || "Jigma validation blocked output";
+    }
     if (state.pageStylesDecision === "" || warningCountByCode(/signature|asset|unresolved|sanitize|sanit/i) > 0) {
       state.statusKind = "review";
       if (warningCountByCode(/svg\.signature/i) > 0) {
@@ -825,6 +891,7 @@
       state.pageStylesDecision === "exclude";
     return Boolean(
       state.lastRun &&
+      !(state.lastRun.diagnostics && state.lastRun.diagnostics.blocked) &&
       state.target &&
       state.target.exists &&
       state.target.acceptsChildren &&
@@ -928,9 +995,17 @@
 
   function doCopy() {
     try {
-      var result = state.lastRun || runConversion();
-      navigator.clipboard.writeText(minimalPayload(result)).then(function () {
-        updateStatus("Copied Bricks Compatibility payload.", "ready");
+      var result = runConversion();
+      if (result.diagnostics && result.diagnostics.blocked) {
+        throw new Error(result.diagnostics.blockingErrors[0] || "Jigma validation blocked copy.");
+      }
+      var payloadText = minimalPayload(result);
+      var validation = validateClipboardText(payloadText);
+      if (!validation.valid) {
+        throw new Error(validation.message);
+      }
+      writeClipboardText(payloadText).then(function () {
+        updateStatus("Bricks structure copied", "ready");
       }).catch(function () {
         updateStatus("Clipboard copy failed.", "blocked");
         console.log("Jigma Bricks payload", result.payload);
@@ -943,6 +1018,11 @@
   function doInsert() {
     if (!canInsert()) {
       updateStatus();
+      return;
+    }
+    var payloadValidation = validateClipboardPayload(state.lastRun.payload);
+    if (!payloadValidation.valid) {
+      updateStatus(payloadValidation.message || "Jigma validation blocked insert.", "blocked");
       return;
     }
     if (ui.confirmBeforeInsert && !window.confirm("Insert Jigma content into " + state.target.shortLabel + "?")) {

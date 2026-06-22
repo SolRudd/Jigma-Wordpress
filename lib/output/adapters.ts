@@ -1,9 +1,12 @@
 import type { BricksExport, ConversionInput } from "../../types/jigma.ts";
 import {
   createBricksExport,
+  getBricksExportBlockingMessages,
   serializeBricksClipboardPayload,
+  serializeBricksClipboardPayloadJson,
   serializeJigmaDebugReport,
   TARGET_BRICKS_VERSION,
+  validateBricksClipboardPayloadSchema,
 } from "../bricks/export.ts";
 
 export type OutputTarget = "bricks";
@@ -47,6 +50,39 @@ export function serializeOutputClipboardPayload(
   }
 
   return exportResult;
+}
+
+export function serializeOutputClipboardJson(
+  exportResult: BricksExport,
+  adapter: OutputAdapter = DEFAULT_OUTPUT_ADAPTER,
+) {
+  if (adapter.target === "bricks") {
+    return serializeBricksClipboardPayloadJson(exportResult);
+  }
+
+  return JSON.stringify(exportResult);
+}
+
+export function getOutputBlockingMessages(
+  exportResult: BricksExport,
+  adapter: OutputAdapter = DEFAULT_OUTPUT_ADAPTER,
+) {
+  if (adapter.target === "bricks") {
+    return getBricksExportBlockingMessages(exportResult);
+  }
+
+  return [];
+}
+
+export function validateOutputClipboardPayload(
+  payload: unknown,
+  adapter: OutputAdapter = DEFAULT_OUTPUT_ADAPTER,
+) {
+  if (adapter.target === "bricks") {
+    return validateBricksClipboardPayloadSchema(payload);
+  }
+
+  return { valid: true, errors: [] };
 }
 
 export function serializeOutputDebugReport(

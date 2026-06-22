@@ -1,0 +1,40 @@
+{
+  "text": [
+    "What Our Clients Say",
+    "Latest Insights",
+    "“",
+    "Jigma kept our launch moving without trading away detail.",
+    "Ava Lee",
+    "Founder, Northstar Studio",
+    "We pasted into Bricks and the hierarchy finally made sense.",
+    "Marcus Stone",
+    "Creative Director, Pixel Works",
+    "←",
+    "→",
+    "Build scalable systems",
+    "Turn static sections into reusable builder-native content.",
+    "Read more",
+    "Keep proof editable",
+    "Preserve quotes, links and media without hand rebuilding."
+  ],
+  "hrefs": [
+    "/insights/scalable-systems",
+    "/insights/editable-proof"
+  ],
+  "images": [
+    {
+      "src": "/images/insight-systems.webp",
+      "alt": "Systems dashboard preview"
+    },
+    {
+      "src": "/images/insight-proof.webp",
+      "alt": "Social proof cards preview"
+    }
+  ],
+  "classes": [
+    "lit-review",
+    "lit-review--featured",
+    "lit-review-slider__dots",
+    "is-active"
+  ]
+}

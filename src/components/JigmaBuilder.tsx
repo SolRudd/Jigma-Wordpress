@@ -51,8 +51,11 @@ import { inspectDependencies } from "../../lib/dependencies/inspect.ts";
 import {
   DEFAULT_OUTPUT_ADAPTER,
   createOutputExport,
+  getOutputBlockingMessages,
   serializeOutputClipboardPayload,
+  serializeOutputClipboardJson,
   serializeOutputDebugReport,
+  validateOutputClipboardPayload,
 } from "../../lib/output/adapters.ts";
 import { createPreviewDocument } from "../../lib/preview/document.ts";
 import type {
@@ -145,6 +148,28 @@ const WORKSPACE_TABS: { id: WorkspaceTab; label: string }[] = [
   { id: "inspect", label: "Inspect" },
   { id: "export", label: "Export" },
 ];
+
+async function writeClipboardText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+
+  if (!copied) {
+    throw new Error("Clipboard permission denied.");
+  }
+}
 
 function normalizeSeverity(severity: ConversionSeverity): Exclude<ConversionSeverity, "info"> {
   return severity === "info" ? "notice" : severity;
@@ -784,7 +809,7 @@ export default function JigmaBuilder() {
     [preview.html, preview.css, preview.js, options, excludedLayerIds, deletedLayerIds],
   );
   const bricksClipboardJson = useMemo(
-    () => JSON.stringify(serializeOutputClipboardPayload(bricksExport), null, 2),
+    () => serializeOutputClipboardJson(bricksExport),
     [bricksExport],
   );
   const bricksDebugJson = useMemo(
@@ -1230,19 +1255,44 @@ export default function JigmaBuilder() {
       return;
     }
 
-    if (!preview.html.trim()) {
+    if (!html.trim()) {
       setStatus("Add some HTML before exporting");
       setMessages([{ kind: "export", message: "Add some HTML before exporting." }]);
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(bricksClipboardJson);
+      const latestExport = createOutputExport({
+        html,
+        css,
+        js,
+        options,
+        excludedLayerIds,
+        deletedLayerIds,
+      });
+      const blockingMessages = getOutputBlockingMessages(latestExport, outputAdapter);
+      if (blockingMessages.length > 0) {
+        setStatus("Export blocked");
+        setMessages(blockingMessages.map((message) => ({ kind: "export", message })));
+        return;
+      }
+      const json = serializeOutputClipboardJson(latestExport, outputAdapter);
+      const parsed = JSON.parse(json);
+      const schema = validateOutputClipboardPayload(parsed, outputAdapter);
+      if (!json.trim().startsWith("{") || !schema.valid) {
+        throw new Error(schema.errors[0] ?? "Generated clipboard JSON failed validation.");
+      }
+      await writeClipboardText(json);
       setStatus("Bricks structure copied");
       setMessages([{ kind: "export", message: "Copied selected Bricks structure." }]);
-    } catch {
+    } catch (error) {
       setStatus("Clipboard copy failed");
-      setMessages([{ kind: "export", message: "Clipboard copy failed. View generated JSON as a fallback." }]);
+      setMessages([{
+        kind: "export",
+        message: error instanceof Error
+          ? error.message
+          : "Clipboard copy failed. View generated JSON as a fallback.",
+      }]);
     }
   };
 
