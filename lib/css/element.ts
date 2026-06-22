@@ -36,6 +36,16 @@ export interface ElementCssResult {
   fallbackRuleCountByClassName?: Map<string, number>;
 }
 
+export interface CssDeclarationConservationResult {
+  sourceDeclarationCount: number;
+  preservedDeclarationCount: number;
+  pageLevelDeclarationCount: number;
+  unsupportedDeclarationCount: number;
+  missingDeclarations: string[];
+  coveragePercentage: number;
+  valid: boolean;
+}
+
 export interface ElementCssOptions {
   minify?: boolean;
   classFallbackStrategy?: "bricks-class-root" | "literal-bem";
@@ -1062,12 +1072,180 @@ function getOwningClassTarget(
     .map((token) => getPreferredClassTarget(token.className, classMap))
     .filter((target): target is ClassCssTarget => Boolean(target));
 
-  const explicitBlock = matchedTargets.find((target) => !target.className.includes("__"));
-  if (explicitBlock) {
-    return explicitBlock;
+  const modifier = matchedTargets.find((target) => target.className.includes("--"));
+  if (modifier) {
+    return modifier;
   }
 
   return matchedTargets[0] ?? null;
+}
+
+function normalizeCssSearchText(value: string) {
+  return stripCssComments(value)
+    .replace(/\s+/g, " ")
+    .replace(/\s*([{}:;,>+~])\s*/g, "$1")
+    .trim();
+}
+
+function collectConservationDeclarations(
+  css: string,
+  contexts: string[] = [],
+): Array<{
+  selector: string;
+  declaration: string;
+  contexts: string[];
+  classification: "class-owned" | "page-level" | "unsupported";
+}> {
+  const records: Array<{
+    selector: string;
+    declaration: string;
+    contexts: string[];
+    classification: "class-owned" | "page-level" | "unsupported";
+  }> = [];
+
+  parseTopLevelBlocks(css).forEach((block) => {
+    if (/^@(?:media|container|supports)\b/i.test(block.selector)) {
+      records.push(...collectConservationDeclarations(block.body, [...contexts, block.selector]));
+      return;
+    }
+
+    if (/^@(?:-\w+-)?keyframes\b/i.test(block.selector)) {
+      records.push({
+        selector: block.selector,
+        declaration: block.body.trim(),
+        contexts,
+        classification: "page-level",
+      });
+      return;
+    }
+
+    const declarations = parseDeclarations(block.body).map(formatDeclaration);
+    if (declarations.length === 0) {
+      return;
+    }
+
+    if (block.selector === ":root" || /^@font-face\b/i.test(block.selector)) {
+      declarations.forEach((declaration) => {
+        records.push({
+          selector: block.selector,
+          declaration,
+          contexts,
+          classification: "page-level",
+        });
+      });
+      return;
+    }
+
+    if (/^@/.test(block.selector)) {
+      declarations.forEach((declaration) => {
+        records.push({
+          selector: block.selector,
+          declaration,
+          contexts,
+          classification: "unsupported",
+        });
+      });
+      return;
+    }
+
+    block.selector.split(",").forEach((selector) => {
+      const trimmedSelector = selector.trim();
+      if (!trimmedSelector) {
+        return;
+      }
+
+      declarations.forEach((declaration) => {
+        records.push({
+          selector: trimmedSelector,
+          declaration,
+          contexts,
+          classification: "class-owned",
+        });
+      });
+    });
+  });
+
+  return records;
+}
+
+function outputContainsDeclaration(
+  outputCss: string,
+  selector: string,
+  declaration: string,
+  contexts: string[],
+) {
+  const normalizedOutput = normalizeCssSearchText(outputCss);
+  const normalizedSelector = normalizeCssSearchText(selector);
+  const normalizedDeclaration = normalizeCssSearchText(declaration);
+  const selectorNeedle = `${normalizedSelector}{`;
+  let selectorIndex = normalizedOutput.indexOf(selectorNeedle);
+
+  while (selectorIndex !== -1) {
+    const declarationIndex = normalizedOutput.indexOf(normalizedDeclaration, selectorIndex + selectorNeedle.length);
+    const nextSelectorIndex = normalizedOutput.indexOf("{", selectorIndex + selectorNeedle.length);
+    const declarationBelongsToSelector = declarationIndex !== -1 &&
+      (nextSelectorIndex === -1 || declarationIndex < nextSelectorIndex);
+    const contextMatches = contexts.every((context) => {
+      const contextIndex = normalizedOutput.lastIndexOf(normalizeCssSearchText(context), selectorIndex);
+      return contextIndex !== -1;
+    });
+
+    if (declarationBelongsToSelector && contextMatches) {
+      return true;
+    }
+
+    selectorIndex = normalizedOutput.indexOf(selectorNeedle, selectorIndex + selectorNeedle.length);
+  }
+
+  return false;
+}
+
+export function auditCssDeclarationConservation(
+  sourceCss: string,
+  outputCss: string,
+): CssDeclarationConservationResult {
+  const records = collectConservationDeclarations(sourceCss);
+  let preservedDeclarationCount = 0;
+  let pageLevelDeclarationCount = 0;
+  let unsupportedDeclarationCount = 0;
+  const missingDeclarations: string[] = [];
+
+  records.forEach((record) => {
+    if (record.classification === "page-level") {
+      pageLevelDeclarationCount += 1;
+      return;
+    }
+
+    if (
+      record.classification === "class-owned" &&
+      outputContainsDeclaration(outputCss, record.selector, record.declaration, record.contexts)
+    ) {
+      preservedDeclarationCount += 1;
+      return;
+    }
+
+    unsupportedDeclarationCount += 1;
+    missingDeclarations.push([
+      ...record.contexts,
+      record.selector,
+      record.declaration,
+    ].join(" | "));
+  });
+
+  const accountedCount = preservedDeclarationCount + pageLevelDeclarationCount;
+  const coveragePercentage = records.length > 0
+    ? Math.round((accountedCount / records.length) * 100)
+    : 100;
+
+  return {
+    sourceDeclarationCount: records.length,
+    preservedDeclarationCount,
+    pageLevelDeclarationCount,
+    unsupportedDeclarationCount,
+    missingDeclarations,
+    coveragePercentage,
+    valid: unsupportedDeclarationCount === 0,
+  };
 }
 
 function mapSelectorToGeneratedBem(

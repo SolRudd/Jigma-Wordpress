@@ -240,6 +240,11 @@ export interface BricksExportValidation {
   sourceImageCount?: number;
   missingImageCount?: number;
   clipboardSchemaValid?: boolean;
+  cssDeclarationCoverageValid?: boolean;
+  sourceCssDeclarationCount?: number;
+  preservedCssDeclarationCount?: number;
+  missingCssDeclarationCount?: number;
+  cssConservationPercentage?: number;
 }
 
 export interface BricksClassAuditEntry {

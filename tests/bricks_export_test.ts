@@ -21,6 +21,7 @@ import {
 import { createAssetManifest } from "../lib/assets/manifest.ts";
 import { BRICKS_ELEMENT_CUSTOM_CSS_FIELD } from "../lib/css/element.ts";
 import { inspectDependencies } from "../lib/dependencies/inspect.ts";
+import { splitFullHtmlDocument } from "../lib/parser/html.ts";
 import {
   DEFAULT_OUTPUT_ADAPTER,
   createOutputExport,
@@ -252,6 +253,14 @@ const litSocialProofReference = JSON.parse(readFileSync(
   images: Array<{ src: string; alt: string }>;
   classes: string[];
 };
+const assetFidelityHtml = readFileSync(
+  new URL("./fixtures/asset-fidelity/source.html", import.meta.url),
+  "utf8",
+);
+const assetFidelityCss = readFileSync(
+  new URL("./fixtures/asset-fidelity/source.css", import.meta.url),
+  "utf8",
+);
 
 const compatibilityOptions: Partial<OutputOptions> = {
   exportProfile: "bricks-compatibility",
@@ -809,8 +818,7 @@ describe("Bricks export", () => {
     expect(eyebrow.children).toEqual([]);
     expect(eyebrow.settings.tag).toBe("div");
     expect(eyebrow.settings.customTag).toBe("div");
-    expect(eyebrow.settings.text).toContain("<span></span>");
-    expect(eyebrow.settings.text).toContain("02 · SYSTEMS BUILT TO SCALE");
+    expect(eyebrow.settings.text).toBe("<span></span>02 · SYSTEMS BUILT TO SCALE");
     expect(getGlobalClassCss(result, "bb-system-shell__eyebrow")).toContain(".bb-system-shell__eyebrow span");
 
     expect(heading.name).toBe("heading");
@@ -825,6 +833,10 @@ describe("Bricks export", () => {
       "bb-system-card--active",
     ]);
     expect(getGlobalClassCss(result, "bb-system-card--active")).toContain(".bb-system-card--active");
+    expect(getGlobalClassCss(result, "bb-system-card--active")).toContain("z-index: 1;");
+    expect(getGlobalClassCss(result, "bb-system-card--active")).toContain("@media (max-width: 1100px)");
+    expect(getGlobalClassCss(result, "bb-system-card--active")).toContain("min-height: 330px;");
+    expect(getGlobalClassCss(result, "bb-system-card--active")).toContain(".bb-system-card--active .bb-system-card__label");
     expect(getGlobalClassCss(result, "bb-system-card--active")).toContain("@media (max-width: 900px)");
     expect(cardLabel.name).toBe("text-basic");
     expect(cardLabel.settings.text).toBe("Core Focus");
@@ -853,10 +865,38 @@ describe("Bricks export", () => {
     expect(contentJson).toContain("Secure, optimised &amp; accessible");
     expect(contentJson).toContain("Projects delivered worldwide");
 
+    expect(getGlobalClassCss(result, "bb-system-shell")).toContain("position: relative;");
+    expect(getGlobalClassCss(result, "bb-system-shell")).toContain(".bb-system-shell::before");
+    expect(getGlobalClassCss(result, "bb-system-shell")).toContain("@media (max-width: 1100px)");
+    expect(getGlobalClassCss(result, "bb-system-shell")).toContain("padding: 96px 20px;");
+    expect(getGlobalClassCss(result, "bb-system-shell__inner")).toContain("z-index: 1;");
+    expect(getGlobalClassCss(result, "bb-system-shell__inner")).toContain("@media (max-width: 1100px)");
+    expect(getGlobalClassCss(result, "bb-system-shell__inner")).toContain("grid-template-columns: 1fr;");
     expect(getGlobalClassCss(result, "bb-system-shell__inner")).toContain("@media (max-width: 900px)");
     expect(getGlobalClassCss(result, "bb-system-shell__heading")).toContain("@media (max-width: 560px)");
+    expect(getGlobalClassCss(result, "bb-system-shell__tags")).toContain(".bb-system-shell__tags span");
+    expect(getGlobalClassCss(result, "bb-system-shell__tags")).toContain("background: rgba(159, 122, 255, 0.08);");
+    expect(getGlobalClassCss(result, "bb-system-shell__cards")).toContain("@media (max-width: 1100px)");
+    expect(getGlobalClassCss(result, "bb-system-shell__cards")).toContain("grid-template-columns: repeat(3, minmax(220px, 1fr));");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain("box-sizing: border-box;");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain("overflow: hidden;");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain(".bb-system-card::after");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain(".bb-system-card p");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain("position: relative;");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain("z-index: 1;");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain(".bb-system-card a");
+    expect(getGlobalClassCss(result, "bb-system-card")).toContain("@media (max-width: 1100px)");
     expect(getGlobalClassCss(result, "bb-system-stats")).toContain("@media (max-width: 900px)");
     expect(getGlobalClassCss(result, "bb-system-stats")).toContain("@media (max-width: 560px)");
+    expect(getGlobalClassCss(result, "bb-system-stats")).toContain("@media (max-width: 1100px)");
+    expect(getGlobalClassCss(result, "bb-system-stat")).toContain("@media (max-width: 1100px)");
+    expect(getGlobalClassCss(result, "bb-system-stat")).toContain("border-color: rgba(40, 243, 212, 0.18);");
+    expect(result.validation.cssDeclarationCoverageValid).toBe(true);
+    expect(result.validation.cssConservationPercentage).toBe(100);
+    expect(result.validation.sourceCssDeclarationCount).toBeGreaterThan(0);
+    expect(result.validation.missingCssDeclarationCount).toBe(0);
+    expect(result.validation.pseudoRuleCount).toBeGreaterThanOrEqual(2);
+    expect(result.validation.responsiveRuleCount).toBeGreaterThanOrEqual(3);
     expect(result.validation.sourceTextCoverageValid).toBe(true);
     expect(result.validation.sourceTextCount).toBeGreaterThan(0);
     expect(result.validation.missingSourceTextCount).toBe(0);
@@ -970,9 +1010,13 @@ describe("Bricks export", () => {
     });
 
     expect(allCss).toContain(".lit-review-slider__dots span.is-active");
+    expect(getGlobalClassCss(result, "lit-review-slider__dots")).toContain(".lit-review-slider__dots span.is-active");
+    expect(getGlobalClassCss(result, "is-active")).not.toContain(".lit-review-slider__dots span.is-active");
     litSocialProofReference.classes.forEach((className) => {
       expect(getGlobalClass(result, className)).toBeDefined();
     });
+    expect(result.validation.cssDeclarationCoverageValid).toBe(true);
+    expect(result.validation.cssConservationPercentage).toBe(100);
     expect(result.validation.sourceTextCoverageValid).toBe(true);
     expect(result.validation.missingSourceTextCount).toBe(0);
     expect(result.validation.duplicatedSourceTextCount).toBe(0);
@@ -983,6 +1027,75 @@ describe("Bricks export", () => {
     expect(result.validation.clipboardSchemaValid).toBe(true);
     expect(getBricksExportBlockingMessages(result)).toEqual([]);
     expect(referencedClassIds.every((id) => classIds.has(id))).toBe(true);
+  });
+
+  it("splits full HTML documents into isolated editor sources before conversion", () => {
+    const fullDocument = `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Fixture</title>
+    <style>
+      .bb-system-shell { color: white; }
+    </style>
+  </head>
+  <body>
+    ${bbSystemShellHtml}
+    <script>
+      window.jigmaFixture = true;
+    </script>
+  </body>
+</html>`;
+    const split = splitFullHtmlDocument(fullDocument);
+
+    expect(split.didSplit).toBe(true);
+    expect(split.html).toContain("<section class=\"bb-system-shell\">");
+    expect(split.html).not.toMatch(/<!doctype|<\/?(?:html|head|body|style|script|meta|title)\b/i);
+    expect(split.css).toContain(".bb-system-shell { color: white; }");
+    expect(split.javascript).toContain("window.jigmaFixture = true;");
+  });
+
+  it("preserves image, inline SVG, CSS background URL, and Unicode glyph asset cases", () => {
+    const result = exportFor(assetFidelityHtml, assetFidelityCss, "", compatibilityOptions);
+    const image = result.content.find((element) => element.name === "image")!;
+    const svg = result.content.find((element) => element.name === "svg")!;
+    const badge = getElementByBemClass(result, "asset-fidelity__badge")!;
+    const backgroundCss = getGlobalClassCss(result, "asset-fidelity__background");
+    const svgCss = getGlobalClassCss(result, "asset-fidelity__icon");
+    const visibleText = payloadVisibleText(result);
+
+    expect(image).toBeDefined();
+    expect((image.settings.image as { url?: string })?.url).toBe("/fixtures/product-card-960.webp");
+    expect(image.settings.altText).toBe("Layered product dashboard");
+    expect(image.settings.width).toBe(960);
+    expect(image.settings.height).toBe(540);
+    expect(image.settings.loading).toBe("lazy");
+    expect(image.settings.decoding).toBe("async");
+    expect(image.settings.responsiveSources).toEqual([
+      {
+        media: "(max-width: 640px)",
+        srcset: "/fixtures/product-card-480.webp 480w",
+        type: "image/webp",
+      },
+    ]);
+
+    expect(svg).toBeDefined();
+    expect(svg.settings.source).toBe("code");
+    expect(`${svg.settings.code}`).toContain("<svg");
+    expect(`${svg.settings.code}`).toContain("<path");
+    expect(`${svg.settings.code}`).not.toContain("onload");
+    expect(result.warnings.some((warning) => warning.code === "svg.signature_required")).toBe(true);
+    expect(svgCss).toContain(".asset-fidelity__icon");
+
+    expect(badge.name).toBe("div");
+    expect(visibleText).toContain("▣");
+    expect(result.content.filter((element) => element.name === "svg")).toHaveLength(1);
+    expect(backgroundCss).toContain('background-image: url("/fixtures/background-grid.webp");');
+    expect(result.validation.imageCoverageValid).toBe(true);
+    expect(result.validation.missingImageCount).toBe(0);
+    expect(result.validation.cssDeclarationCoverageValid).toBe(true);
+    expect(result.validation.cssConservationPercentage).toBe(100);
+    expect(getBricksExportBlockingMessages(result)).toEqual([]);
   });
 
   it("defines the standalone HTML, CSS, and review-required JavaScript editors", () => {

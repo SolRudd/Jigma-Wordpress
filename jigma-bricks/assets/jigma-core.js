@@ -566,7 +566,7 @@
         if (!text) {
           return;
         }
-        if (output && lastToken !== "br" && !output.endsWith(" ")) {
+        if (output && lastToken !== "br" && lastToken !== "empty-element" && !output.endsWith(" ")) {
           output += " ";
         }
         output += escapeHtml(text);
@@ -584,7 +584,8 @@
         output += " ";
       }
       output += html;
-      lastToken = part.element.tagName === "br" ? "br" : "element";
+      const hasVisibleInlineText = normalizeInlineText(getElementText(part.element)).length > 0;
+      lastToken = part.element.tagName === "br" ? "br" : hasVisibleInlineText ? "element" : "empty-element";
     });
     return output.trim();
   }
@@ -2588,11 +2589,128 @@ ${css}` : css;
   function getOwningClassTarget(selector, classMap) {
     const tokens = getSelectorClassTokens(selector);
     const matchedTargets = tokens.map((token) => getPreferredClassTarget(token.className, classMap)).filter((target) => Boolean(target));
-    const explicitBlock = matchedTargets.find((target) => !target.className.includes("__"));
-    if (explicitBlock) {
-      return explicitBlock;
+    const modifier = matchedTargets.find((target) => target.className.includes("--"));
+    if (modifier) {
+      return modifier;
     }
     return matchedTargets[0] ?? null;
+  }
+  function normalizeCssSearchText(value) {
+    return stripCssComments(value).replace(/\s+/g, " ").replace(/\s*([{}:;,>+~])\s*/g, "$1").trim();
+  }
+  function collectConservationDeclarations(css, contexts = []) {
+    const records = [];
+    parseTopLevelBlocks$1(css).forEach((block) => {
+      if (/^@(?:media|container|supports)\b/i.test(block.selector)) {
+        records.push(...collectConservationDeclarations(block.body, [...contexts, block.selector]));
+        return;
+      }
+      if (/^@(?:-\w+-)?keyframes\b/i.test(block.selector)) {
+        records.push({
+          selector: block.selector,
+          declaration: block.body.trim(),
+          contexts,
+          classification: "page-level"
+        });
+        return;
+      }
+      const declarations = parseDeclarations(block.body).map(formatDeclaration);
+      if (declarations.length === 0) {
+        return;
+      }
+      if (block.selector === ":root" || /^@font-face\b/i.test(block.selector)) {
+        declarations.forEach((declaration) => {
+          records.push({
+            selector: block.selector,
+            declaration,
+            contexts,
+            classification: "page-level"
+          });
+        });
+        return;
+      }
+      if (/^@/.test(block.selector)) {
+        declarations.forEach((declaration) => {
+          records.push({
+            selector: block.selector,
+            declaration,
+            contexts,
+            classification: "unsupported"
+          });
+        });
+        return;
+      }
+      block.selector.split(",").forEach((selector) => {
+        const trimmedSelector = selector.trim();
+        if (!trimmedSelector) {
+          return;
+        }
+        declarations.forEach((declaration) => {
+          records.push({
+            selector: trimmedSelector,
+            declaration,
+            contexts,
+            classification: "class-owned"
+          });
+        });
+      });
+    });
+    return records;
+  }
+  function outputContainsDeclaration(outputCss, selector, declaration, contexts) {
+    const normalizedOutput = normalizeCssSearchText(outputCss);
+    const normalizedSelector = normalizeCssSearchText(selector);
+    const normalizedDeclaration = normalizeCssSearchText(declaration);
+    const selectorNeedle = `${normalizedSelector}{`;
+    let selectorIndex = normalizedOutput.indexOf(selectorNeedle);
+    while (selectorIndex !== -1) {
+      const declarationIndex = normalizedOutput.indexOf(normalizedDeclaration, selectorIndex + selectorNeedle.length);
+      const nextSelectorIndex = normalizedOutput.indexOf("{", selectorIndex + selectorNeedle.length);
+      const declarationBelongsToSelector = declarationIndex !== -1 && (nextSelectorIndex === -1 || declarationIndex < nextSelectorIndex);
+      const contextMatches = contexts.every((context) => {
+        const contextIndex = normalizedOutput.lastIndexOf(normalizeCssSearchText(context), selectorIndex);
+        return contextIndex !== -1;
+      });
+      if (declarationBelongsToSelector && contextMatches) {
+        return true;
+      }
+      selectorIndex = normalizedOutput.indexOf(selectorNeedle, selectorIndex + selectorNeedle.length);
+    }
+    return false;
+  }
+  function auditCssDeclarationConservation(sourceCss, outputCss) {
+    const records = collectConservationDeclarations(sourceCss);
+    let preservedDeclarationCount = 0;
+    let pageLevelDeclarationCount = 0;
+    let unsupportedDeclarationCount = 0;
+    const missingDeclarations = [];
+    records.forEach((record) => {
+      if (record.classification === "page-level") {
+        pageLevelDeclarationCount += 1;
+        return;
+      }
+      if (record.classification === "class-owned" && outputContainsDeclaration(outputCss, record.selector, record.declaration, record.contexts)) {
+        preservedDeclarationCount += 1;
+        return;
+      }
+      unsupportedDeclarationCount += 1;
+      missingDeclarations.push([
+        ...record.contexts,
+        record.selector,
+        record.declaration
+      ].join(" | "));
+    });
+    const accountedCount = preservedDeclarationCount + pageLevelDeclarationCount;
+    const coveragePercentage = records.length > 0 ? Math.round(accountedCount / records.length * 100) : 100;
+    return {
+      sourceDeclarationCount: records.length,
+      preservedDeclarationCount,
+      pageLevelDeclarationCount,
+      unsupportedDeclarationCount,
+      missingDeclarations,
+      coveragePercentage,
+      valid: unsupportedDeclarationCount === 0
+    };
   }
   function mapSelectorToGeneratedBem(selector, owner, classMap) {
     let ownerReplaced = false;
@@ -3916,6 +4034,17 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     }
     return void 0;
   }
+  function getOriginalClassesForExport(element) {
+    const classes = getClassNames$1(element);
+    if (element.tagName !== "picture") {
+      return Array.from(new Set(classes));
+    }
+    const image = findFirstDescendant(element, (child) => child.tagName === "img");
+    return Array.from(/* @__PURE__ */ new Set([
+      ...classes,
+      ...image ? getClassNames$1(image) : []
+    ]));
+  }
   function findProcessCardContext(element, ancestors) {
     const card = [element, ...[...ancestors].reverse()].find(
       (candidate) => getClassNames$1(candidate).some((className) => className === "lit-process-light__card")
@@ -4337,7 +4466,7 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
           `<${element.tagName}> was converted to a Bricks Div fallback.`
         );
       }
-      const originalClasses = Array.from(new Set(getClassNames$1(element)));
+      const originalClasses = getOriginalClassesForExport(element);
       const assignment = bemFactory.create(element, path, parent);
       const id = makeStableId(`${path}:${element.tagName}:${assignment.className}:${getOwnText$1(element, 64)}`);
       const classList = compatibilityProfile ? makeCompatibilityClassList(originalClasses, warnings) : makeClassList(
@@ -4616,6 +4745,26 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         "error"
       );
     }
+    const cssConservationAudit = input.css.trim() && shouldCreateNativeBemClasses ? auditCssDeclarationConservation(input.css, classCustomCss) : {
+      sourceDeclarationCount: 0,
+      preservedDeclarationCount: 0,
+      pageLevelDeclarationCount: 0,
+      unsupportedDeclarationCount: 0,
+      missingDeclarations: [],
+      coveragePercentage: 100,
+      valid: true
+    };
+    if (!cssConservationAudit.valid) {
+      pushGroupedWarning(warnings, {
+        id: "source-css-conservation",
+        code: "source.css_loss",
+        severity: "error",
+        title: "Source CSS coverage failed",
+        message: "Generated Bricks payload does not account for every source CSS declaration.",
+        details: cssConservationAudit.missingDeclarations.slice(0, 12).map((entry) => `Missing CSS: ${entry}`),
+        suggestedAction: "Review class-owned CSS before copying or inserting into Bricks."
+      });
+    }
     const scopedCss = input.css.trim() && shouldCreateScopedCssBlock ? scopeCssToBem(input.css, scopeMap) : {
       css: "",
       warnings: [],
@@ -4873,7 +5022,12 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         imageCoverageValid: imageAudit.valid,
         sourceImageCount: imageAudit.sourceImages.length,
         missingImageCount: imageAudit.missing.length,
-        clipboardSchemaValid: clipboardSchemaAudit.valid
+        clipboardSchemaValid: clipboardSchemaAudit.valid,
+        cssDeclarationCoverageValid: cssConservationAudit.valid,
+        sourceCssDeclarationCount: cssConservationAudit.sourceDeclarationCount,
+        preservedCssDeclarationCount: cssConservationAudit.preservedDeclarationCount + cssConservationAudit.pageLevelDeclarationCount,
+        missingCssDeclarationCount: cssConservationAudit.unsupportedDeclarationCount,
+        cssConservationPercentage: cssConservationAudit.coveragePercentage
       }
     };
   }
@@ -4913,6 +5067,9 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     }
     if (!validation.clipboardSchemaValid) {
       messages.push("Clipboard payload schema is invalid.");
+    }
+    if (!validation.cssDeclarationCoverageValid) {
+      messages.push("Source CSS declarations were not fully preserved or classified.");
     }
     return messages;
   }

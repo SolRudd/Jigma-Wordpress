@@ -45,6 +45,7 @@ import {
   collectLayerIds,
   getLayers,
   sanitizeHtmlInput,
+  splitFullHtmlDocument,
 } from "../../lib/parser/html.ts";
 import { formatEditorCode, sanitizeCssInput, sanitizeJsInput } from "../../lib/formatters/code.ts";
 import { inspectDependencies } from "../../lib/dependencies/inspect.ts";
@@ -257,7 +258,8 @@ function writeSavedSections(sections: LocalSavedSection[]) {
 }
 
 function getSourceSeparationError(input: { html: string; css: string; js: string }): EditorMessage | null {
-  if (/<\/?(?:style|script|html|head|body)\b|<!doctype/i.test(input.html)) {
+  const htmlCanBeSplit = splitFullHtmlDocument(input.html).didSplit;
+  if (!htmlCanBeSplit && /<\/?(?:style|script|html|head|body)\b|<!doctype/i.test(input.html)) {
     return {
       kind: "html",
       message: "HTML editor contains document, style or script markup. Keep HTML only and move CSS or JavaScript into their own editors.",
@@ -286,6 +288,41 @@ function getSourceSeparationError(input: { html: string; css: string; js: string
   }
 
   return null;
+}
+
+function normalizeWorkspaceSources(input: { html: string; css: string; js: string }) {
+  const split = splitFullHtmlDocument(input.html);
+  const messages: EditorMessage[] = [];
+  const html = sanitizeHtmlInput(split.didSplit ? split.html : input.html);
+  const css = sanitizeCssInput(split.didSplit ? split.css : input.css);
+  const js = sanitizeJsInput(split.didSplit ? split.javascript : input.js);
+
+  if (split.didSplit) {
+    messages.push({
+      kind: "html",
+      message: "Full HTML document split into HTML, CSS and JavaScript editors.",
+    });
+  }
+
+  if (html !== input.html && !split.didSplit) {
+    messages.push({ kind: "html", message: "Cleaned wrapper text before preview." });
+  }
+
+  if (css !== input.css && !split.didSplit) {
+    messages.push({ kind: "css", message: "Cleaned wrapper text before preview." });
+  }
+
+  if (js !== input.js && !split.didSplit) {
+    messages.push({ kind: "js", message: "Cleaned wrapper text before preview." });
+  }
+
+  return {
+    html,
+    css,
+    js,
+    messages,
+    didSplit: split.didSplit,
+  };
 }
 
 function getEditorHint(kind: EditorKind) {
@@ -1085,24 +1122,21 @@ export default function JigmaBuilder() {
       return;
     }
 
-    const nextHtml = sanitizeHtmlInput(html);
-    const nextCss = sanitizeCssInput(css);
-    const nextJs = sanitizeJsInput(js);
-    const nextMessages: EditorMessage[] = [];
+    const normalized = normalizeWorkspaceSources({ html, css, js });
+    const nextHtml = normalized.html;
+    const nextCss = normalized.css;
+    const nextJs = normalized.js;
 
     if (nextHtml !== html) {
       setHtml(nextHtml);
-      nextMessages.push({ kind: "html", message: "Cleaned wrapper text before preview." });
     }
 
     if (nextCss !== css) {
       setCss(nextCss);
-      nextMessages.push({ kind: "css", message: "Cleaned wrapper text before preview." });
     }
 
     if (nextJs !== js) {
       setJs(nextJs);
-      nextMessages.push({ kind: "js", message: "Cleaned wrapper text before preview." });
     }
 
     setPreview({
@@ -1114,8 +1148,8 @@ export default function JigmaBuilder() {
     setActiveTemplate("custom");
     resetLayerState(nextHtml);
     setRuntimeErrors([]);
-    setMessages(nextMessages);
-    setStatus("Preview refreshed");
+    setMessages(normalized.messages);
+    setStatus(normalized.didSplit ? "Full document split and preview refreshed" : "Preview refreshed");
   };
 
   const formatCode = (kind: EditorKind) => {
@@ -1149,6 +1183,20 @@ export default function JigmaBuilder() {
   };
 
   const handlePasteText = (kind: EditorKind, pastedText: string) => {
+    if (kind === "html") {
+      const split = splitFullHtmlDocument(pastedText);
+      if (split.didSplit) {
+        const nextHtml = sanitizeHtmlInput(split.html);
+        const nextCss = sanitizeCssInput(split.css);
+        const nextJs = sanitizeJsInput(split.javascript);
+        setCss(nextCss);
+        setJs(nextJs);
+        setStatus("Full document split into editors");
+        setMessages([{ kind: "html", message: "Full HTML document split into HTML, CSS and JavaScript editors." }]);
+        return nextHtml;
+      }
+    }
+
     const cleanedText = kind === "html"
       ? sanitizeHtmlInput(pastedText)
       : kind === "css"
@@ -1262,10 +1310,20 @@ export default function JigmaBuilder() {
     }
 
     try {
+      const normalized = normalizeWorkspaceSources({ html, css, js });
+      if (normalized.html !== html) {
+        setHtml(normalized.html);
+      }
+      if (normalized.css !== css) {
+        setCss(normalized.css);
+      }
+      if (normalized.js !== js) {
+        setJs(normalized.js);
+      }
       const latestExport = createOutputExport({
-        html,
-        css,
-        js,
+        html: normalized.html,
+        css: normalized.css,
+        js: normalized.js,
         options,
         excludedLayerIds,
         deletedLayerIds,
@@ -1284,7 +1342,10 @@ export default function JigmaBuilder() {
       }
       await writeClipboardText(json);
       setStatus("Bricks structure copied");
-      setMessages([{ kind: "export", message: "Copied selected Bricks structure." }]);
+      setMessages([
+        ...normalized.messages,
+        { kind: "export", message: "Copied selected Bricks structure." },
+      ]);
     } catch (error) {
       setStatus("Clipboard copy failed");
       setMessages([{

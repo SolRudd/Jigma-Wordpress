@@ -34,6 +34,7 @@ import { inspectDependencies } from "../dependencies/inspect.ts";
 import {
   attachCssToGlobalClasses,
   attachCssToElements,
+  auditCssDeclarationConservation,
   BRICKS_ELEMENT_CUSTOM_CSS_FIELD,
   type ClassCssTarget,
   type ElementCssTarget,
@@ -854,6 +855,19 @@ function findFirstDescendant(element: ParsedElement, predicate: (child: ParsedEl
   return undefined;
 }
 
+function getOriginalClassesForExport(element: ParsedElement) {
+  const classes = getClassNames(element);
+  if (element.tagName !== "picture") {
+    return Array.from(new Set(classes));
+  }
+
+  const image = findFirstDescendant(element, (child) => child.tagName === "img");
+  return Array.from(new Set([
+    ...classes,
+    ...(image ? getClassNames(image) : []),
+  ]));
+}
+
 function findProcessCardContext(element: ParsedElement, ancestors: ParsedElement[]) {
   const card = [element, ...[...ancestors].reverse()].find((candidate) =>
     getClassNames(candidate).some((className) => className === "lit-process-light__card")
@@ -1433,7 +1447,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       );
     }
 
-    const originalClasses = Array.from(new Set(getClassNames(element)));
+    const originalClasses = getOriginalClassesForExport(element);
     const assignment = bemFactory.create(element, path, parent);
     const id = makeStableId(`${path}:${element.tagName}:${assignment.className}:${getOwnText(element, 64)}`);
     const classList = compatibilityProfile
@@ -1782,6 +1796,28 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       "error",
     );
   }
+  const cssConservationAudit = input.css.trim() && shouldCreateNativeBemClasses
+    ? auditCssDeclarationConservation(input.css, classCustomCss)
+    : {
+      sourceDeclarationCount: 0,
+      preservedDeclarationCount: 0,
+      pageLevelDeclarationCount: 0,
+      unsupportedDeclarationCount: 0,
+      missingDeclarations: [],
+      coveragePercentage: 100,
+      valid: true,
+    };
+  if (!cssConservationAudit.valid) {
+    pushGroupedWarning(warnings, {
+      id: "source-css-conservation",
+      code: "source.css_loss",
+      severity: "error",
+      title: "Source CSS coverage failed",
+      message: "Generated Bricks payload does not account for every source CSS declaration.",
+      details: cssConservationAudit.missingDeclarations.slice(0, 12).map((entry) => `Missing CSS: ${entry}`),
+      suggestedAction: "Review class-owned CSS before copying or inserting into Bricks.",
+    });
+  }
 
   const scopedCss = input.css.trim() && shouldCreateScopedCssBlock
     ? scopeCssToBem(input.css, scopeMap)
@@ -2084,6 +2120,12 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       sourceImageCount: imageAudit.sourceImages.length,
       missingImageCount: imageAudit.missing.length,
       clipboardSchemaValid: clipboardSchemaAudit.valid,
+      cssDeclarationCoverageValid: cssConservationAudit.valid,
+      sourceCssDeclarationCount: cssConservationAudit.sourceDeclarationCount,
+      preservedCssDeclarationCount: cssConservationAudit.preservedDeclarationCount +
+        cssConservationAudit.pageLevelDeclarationCount,
+      missingCssDeclarationCount: cssConservationAudit.unsupportedDeclarationCount,
+      cssConservationPercentage: cssConservationAudit.coveragePercentage,
     },
   };
 }
@@ -2127,6 +2169,9 @@ export function getBricksExportBlockingMessages(exportResult: BricksExport) {
   }
   if (!validation.clipboardSchemaValid) {
     messages.push("Clipboard payload schema is invalid.");
+  }
+  if (!validation.cssDeclarationCoverageValid) {
+    messages.push("Source CSS declarations were not fully preserved or classified.");
   }
 
   return messages;

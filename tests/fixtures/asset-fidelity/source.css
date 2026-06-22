@@ -1,0 +1,29 @@
+.asset-fidelity {
+  padding: 48px;
+}
+
+.asset-fidelity__picture {
+  display: block;
+}
+
+.asset-fidelity__image {
+  width: 100%;
+  height: auto;
+}
+
+.asset-fidelity__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.asset-fidelity__icon {
+  width: 32px;
+  height: 32px;
+  color: #28f3d4;
+}
+
+.asset-fidelity__background {
+  background-image: url("/fixtures/background-grid.webp");
+  background-size: cover;
+}

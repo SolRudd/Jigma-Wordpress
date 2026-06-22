@@ -595,11 +595,93 @@
   };
   window.JigmaBricksInsertAdapter = JigmaBricksInsertAdapter;
 
+  function stripEditorFenceText(raw) {
+    return String(raw || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .filter(function (line) {
+        var trimmed = line.trim().replace(/\*\*/g, "").replace(/:$/, "").trim().toLowerCase();
+        return !/^```[a-z0-9_-]*\s*$/i.test(line.trim()) &&
+          trimmed !== ":::" &&
+          !/^:::writing\b/i.test(trimmed) &&
+          trimmed !== "html" &&
+          !/^\d+\.\s*html$/.test(trimmed);
+      })
+      .join("\n")
+      .trim();
+  }
+
+  function sanitizeHtmlSource(raw) {
+    var stripped = stripEditorFenceText(raw);
+    var firstTag = stripped.match(/<(section|div|article|header|main|footer|html|body)\b[^>]*>/i) ||
+      stripped.match(/<[a-z][a-z0-9:-]*\b[^>]*>/i);
+    return firstTag && typeof firstTag.index === "number"
+      ? stripped.slice(firstTag.index).trim()
+      : stripped;
+  }
+
+  function extractTaggedContent(raw, tagName) {
+    var contents = [];
+    var pattern = new RegExp("<" + tagName + "\\b[^>]*>([\\s\\S]*?)<\\/" + tagName + "\\s*>", "gi");
+    var withoutTags = String(raw || "").replace(pattern, function (_, content) {
+      if (String(content || "").trim()) {
+        contents.push(String(content).trim());
+      }
+      return "";
+    });
+    return { contents: contents, withoutTags: withoutTags };
+  }
+
+  function extractBodyContent(raw) {
+    var bodyMatch = String(raw || "").match(/<body\b[^>]*>([\s\S]*?)<\/body\s*>/i);
+    if (bodyMatch) return bodyMatch[1];
+    return String(raw || "")
+      .replace(/<!doctype[\s\S]*?>/gi, "")
+      .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/gi, "")
+      .replace(/<\/?html\b[^>]*>/gi, "")
+      .replace(/<\/?body\b[^>]*>/gi, "");
+  }
+
+  function splitFullHtmlDocument(raw) {
+    var source = String(raw || "").replace(/\r\n?/g, "\n");
+    var didSplit = /<!doctype|<\/?(?:html|head|body|style|script)\b/i.test(source);
+    if (!didSplit) {
+      return { didSplit: false, html: sanitizeHtmlSource(source), css: "", js: "" };
+    }
+    var styleResult = extractTaggedContent(source, "style");
+    var scriptResult = extractTaggedContent(styleResult.withoutTags, "script");
+    return {
+      didSplit: true,
+      html: sanitizeHtmlSource(extractBodyContent(scriptResult.withoutTags)),
+      css: styleResult.contents.join("\n\n").trim(),
+      js: scriptResult.contents.join("\n\n").trim(),
+    };
+  }
+
+  function normalizeWorkspaceSource() {
+    var split = splitFullHtmlDocument(state.html);
+    if (!split.didSplit) {
+      state.html = sanitizeHtmlSource(state.html);
+      return false;
+    }
+
+    state.html = split.html;
+    state.css = split.css;
+    state.js = split.js;
+    state.lastRun = null;
+    persistWorkspace();
+    if (nodes.editors) {
+      syncEditors();
+    }
+    return true;
+  }
+
   function runConversion() {
     if (!window.JigmaCore || typeof window.JigmaCore.convertToBricksCompatibility !== "function") {
       throw new Error("Jigma Core bundle is not available.");
     }
 
+    var didSplit = normalizeWorkspaceSource();
     var result = window.JigmaCore.convertToBricksCompatibility({
       html: state.html,
       css: state.css,
@@ -618,6 +700,9 @@
       state.pageStylesDecision = "exclude";
     } else {
       state.pageStylesDecision = "";
+    }
+    if (didSplit) {
+      updateStatus("Full document split before conversion.", "ready");
     }
     return result;
   }
@@ -1339,6 +1424,22 @@
       persistWorkspace();
       scheduleLiveAnalysis();
       updateStatus();
+    });
+    textarea.addEventListener("paste", function (event) {
+      if (kind !== "html") return;
+      var pastedText = event.clipboardData && event.clipboardData.getData("text/plain");
+      if (typeof pastedText !== "string") return;
+      var split = splitFullHtmlDocument(pastedText);
+      if (!split.didSplit) return;
+      event.preventDefault();
+      state.html = split.html;
+      state.css = split.css;
+      state.js = split.js;
+      state.lastRun = null;
+      persistWorkspace();
+      syncEditors();
+      scheduleLiveAnalysis();
+      updateStatus("Full document split into editors.", "ready");
     });
     actions.append(format, copy, clear);
     header.append(title, badge, actions);

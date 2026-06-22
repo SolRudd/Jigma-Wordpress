@@ -8,7 +8,20 @@
     linear-gradient(145deg, #070a16 0%, #10192c 58%, #07111f 100%);
 }
 
+.bb-system-shell::before {
+  content: "";
+  position: absolute;
+  inset: 14% auto auto -8%;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  background: rgba(40, 243, 212, 0.12);
+  filter: blur(54px);
+}
+
 .bb-system-shell__inner {
+  position: relative;
+  z-index: 1;
   width: min(1180px, 100%);
   margin: 0 auto;
   display: grid;
@@ -88,6 +101,8 @@
 
 .bb-system-card {
   position: relative;
+  box-sizing: border-box;
+  overflow: hidden;
   min-height: 320px;
   padding: 28px;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -96,7 +111,18 @@
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.22);
 }
 
+.bb-system-card::after {
+  content: "";
+  position: absolute;
+  inset: auto -35% -35% auto;
+  width: 190px;
+  height: 190px;
+  border-radius: 50%;
+  background: rgba(159, 122, 255, 0.18);
+}
+
 .bb-system-card--active {
+  z-index: 1;
   transform: translateY(-18px);
   border-color: rgba(40, 243, 212, 0.45);
   background: linear-gradient(145deg, rgba(40, 243, 212, 0.12), rgba(159, 122, 255, 0.18));
@@ -141,6 +167,8 @@
 }
 
 .bb-system-card p {
+  position: relative;
+  z-index: 1;
   margin: 0;
   color: rgba(248, 250, 252, 0.66);
   line-height: 1.6;
@@ -148,6 +176,7 @@
 
 .bb-system-card a {
   position: absolute;
+  z-index: 1;
   right: 24px;
   bottom: 24px;
   color: #28f3d4;
@@ -186,6 +215,43 @@
   margin: 0;
   color: rgba(248, 250, 252, 0.62);
   font-size: 14px;
+}
+
+@media (max-width: 1100px) {
+  .bb-system-shell {
+    padding: 96px 20px;
+  }
+
+  .bb-system-shell__inner {
+    grid-template-columns: 1fr;
+    gap: 42px;
+  }
+
+  .bb-system-shell__cards {
+    grid-template-columns: repeat(3, minmax(220px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 8px;
+  }
+
+  .bb-system-card {
+    min-height: 300px;
+  }
+
+  .bb-system-card--active {
+    min-height: 330px;
+  }
+
+  .bb-system-card--active .bb-system-card__label {
+    margin-bottom: 16px;
+  }
+
+  .bb-system-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bb-system-stat {
+    border-color: rgba(40, 243, 212, 0.18);
+  }
 }
 
 @media (max-width: 900px) {

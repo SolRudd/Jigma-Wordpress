@@ -324,7 +324,7 @@ export function serializeInlineContent(element: ParsedElement): string {
       ...element.children.map((child) => ({ type: "element" as const, element: child })),
     ];
   let output = "";
-  let lastToken: "none" | "text" | "element" | "br" = "none";
+  let lastToken: "none" | "text" | "element" | "empty-element" | "br" = "none";
 
   parts.forEach((part) => {
     if (part.type === "text") {
@@ -332,7 +332,7 @@ export function serializeInlineContent(element: ParsedElement): string {
       if (!text) {
         return;
       }
-      if (output && lastToken !== "br" && !output.endsWith(" ")) {
+      if (output && lastToken !== "br" && lastToken !== "empty-element" && !output.endsWith(" ")) {
         output += " ";
       }
       output += escapeHtml(text);
@@ -359,7 +359,8 @@ export function serializeInlineContent(element: ParsedElement): string {
     }
 
     output += html;
-    lastToken = part.element.tagName === "br" ? "br" : "element";
+    const hasVisibleInlineText = normalizeInlineText(getElementText(part.element)).length > 0;
+    lastToken = part.element.tagName === "br" ? "br" : hasVisibleInlineText ? "element" : "empty-element";
   });
 
   return output.trim();
@@ -579,4 +580,56 @@ export function sanitizeHtmlInput(raw: string): string {
   }
 
   return stripped.slice(firstTag.index).trim();
+}
+
+function extractTaggedContent(raw: string, tagName: "style" | "script") {
+  const contents: string[] = [];
+  const withoutTags = raw.replace(
+    new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}\\s*>`, "gi"),
+    (_, content: string) => {
+      if (content.trim()) {
+        contents.push(content.trim());
+      }
+      return "";
+    },
+  );
+
+  return { contents, withoutTags };
+}
+
+function extractBodyContent(raw: string) {
+  const bodyMatch = raw.match(/<body\b[^>]*>([\s\S]*?)<\/body\s*>/i);
+  if (bodyMatch) {
+    return bodyMatch[1];
+  }
+
+  return raw
+    .replace(/<!doctype[\s\S]*?>/gi, "")
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head\s*>/gi, "")
+    .replace(/<\/?html\b[^>]*>/gi, "")
+    .replace(/<\/?body\b[^>]*>/gi, "");
+}
+
+export function splitFullHtmlDocument(raw: string) {
+  const source = raw.replace(/\r\n?/g, "\n");
+  const didSplit = /<!doctype|<\/?(?:html|head|body|style|script)\b/i.test(source);
+  if (!didSplit) {
+    return {
+      didSplit: false,
+      html: sanitizeHtmlInput(source),
+      css: "",
+      javascript: "",
+    };
+  }
+
+  const styleResult = extractTaggedContent(source, "style");
+  const scriptResult = extractTaggedContent(styleResult.withoutTags, "script");
+  const html = sanitizeHtmlInput(extractBodyContent(scriptResult.withoutTags));
+
+  return {
+    didSplit: true,
+    html,
+    css: styleResult.contents.join("\n\n").trim(),
+    javascript: scriptResult.contents.join("\n\n").trim(),
+  };
 }

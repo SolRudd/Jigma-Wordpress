@@ -7,6 +7,6 @@
   "requires": "6.4",
   "requires_php": "7.4",
   "tested": "",
-  "sha256": "b906e3e7d3af08a6e56c0a07153338690581e041884798395f0bf5eaee6ffea7",
+  "sha256": "eba7e4c117420ba7e23a850872f5f3e53ab72f3d687f35dcc4c426009f443115",
   "changelog": "Jigma Bricks 0.2.3-beta adds first-party hosted WordPress plugin updates from jigma.co.uk."
 }
