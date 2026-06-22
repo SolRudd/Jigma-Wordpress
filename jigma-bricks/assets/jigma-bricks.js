@@ -45,7 +45,6 @@
     });
     return;
   }
-  window.JigmaBricksPanelLoaded = true;
 
   var contentSummary = Array.isArray(config.contentSummary) ? config.contentSummary : [];
   var contentById = new Map(contentSummary.map(function (element) {
@@ -53,17 +52,19 @@
   }));
 
   var defaultUi = {
-    dockState: "expanded",
-    dockHeight: 320,
+    dockState: "collapsed",
+    dockHeight: 300,
     editorWidths: { html: 1, css: 1, js: 1 },
-    visibleEditors: { html: true, css: true, js: true },
+    visibleEditors: { html: true, css: true, js: false },
     activeEditor: "html",
     liveAnalysis: false,
     confirmBeforeInsert: true,
     restoreLastWorkspace: true,
     clearAfterInsert: false,
-    openExpandedOnLoad: true,
+    openExpandedOnLoad: false,
+    rememberDockState: true,
     rememberEditorWidths: true,
+    showDiagnostics: false,
     includeJavaScript: true,
     pageCssMode: "ask",
     classConflictMode: "ask",
@@ -194,8 +195,10 @@
       confirmBeforeInsert: value.confirmBeforeInsert !== false,
       restoreLastWorkspace: value.restoreLastWorkspace !== false,
       clearAfterInsert: Boolean(value.clearAfterInsert),
-      openExpandedOnLoad: value.openExpandedOnLoad !== false,
-      rememberEditorWidths: value.rememberEditorWidths !== false,
+      openExpandedOnLoad: typeof value.openExpandedOnLoad === "boolean" ? value.openExpandedOnLoad : defaultUi.openExpandedOnLoad,
+      rememberDockState: typeof value.rememberDockState === "boolean" ? value.rememberDockState : defaultUi.rememberDockState,
+      rememberEditorWidths: typeof value.rememberEditorWidths === "boolean" ? value.rememberEditorWidths : defaultUi.rememberEditorWidths,
+      showDiagnostics: Boolean(value.showDiagnostics),
       includeJavaScript: value.includeJavaScript !== false,
       pageCssMode: ["ask", "include", "exclude"].indexOf(value.pageCssMode) === -1 ? "ask" : value.pageCssMode,
       classConflictMode: ["ask", "reuse", "cancel"].indexOf(value.classConflictMode) === -1 ? "ask" : value.classConflictMode,
@@ -275,8 +278,8 @@
 
   function initializeBootstrapState() {
     ui = mergeUi(readStoredUi());
-    if (!ui.openExpandedOnLoad && !storageGet(UI_KEY)) {
-      ui.dockState = "collapsed";
+    if (!ui.rememberDockState) {
+      ui.dockState = ui.openExpandedOnLoad ? "expanded" : "collapsed";
     }
 
     var restoredWorkspace = ui.restoreLastWorkspace
@@ -502,47 +505,60 @@
     return null;
   }
 
-  function panelBoundsFallback() {
-    var left = 12;
-    var right = 12;
-    Array.from(document.body.children).forEach(function (node) {
-      if (node.id === ROOT_ID || !node.getBoundingClientRect) return;
-      var style = window.getComputedStyle(node);
-      if (style.position !== "fixed" && style.position !== "absolute" && style.position !== "sticky") return;
-      var rect = node.getBoundingClientRect();
-      if (rect.height < window.innerHeight * 0.45 || rect.width < 120 || rect.width > window.innerWidth * 0.45) return;
-      if (rect.left <= 4) left = Math.max(left, rect.right + 8);
-      if (rect.right >= window.innerWidth - 4) right = Math.max(right, window.innerWidth - rect.left + 8);
+  function isRealBricksBuilderContext() {
+    return Boolean(config.builderContext && config.bricksActive);
+  }
+
+  function abortMount(reason) {
+    setDiagnostics({
+      mounted: false,
+      rootFound: Boolean(document.getElementById(ROOT_ID)),
+      workspaceDetected: false,
+      dockState: reason,
     });
-    return { left: left, right: right, fallback: true };
+  }
+
+  function waitForWorkspace(callback) {
+    var attempts = 0;
+    var maxAttempts = 50;
+    function check() {
+      var workspace = findWorkspaceNode();
+      if (workspace) {
+        callback(workspace);
+        return;
+      }
+      attempts += 1;
+      if (attempts >= maxAttempts) {
+        callback(null);
+        return;
+      }
+      window.setTimeout(check, 100);
+    }
+    check();
   }
 
   function updateDockBounds() {
     if (!nodes.root) return;
     var workspace = findWorkspaceNode();
-    var bounds;
 
-    if (workspace) {
-      var rect = workspace.getBoundingClientRect();
-      bounds = {
-        left: Math.max(8, rect.left),
-        right: Math.max(8, window.innerWidth - rect.right),
-        fallback: false,
-      };
-      nodes.root.dataset.workspace = "detected";
-      setDiagnostics({ workspaceDetected: true });
-    } else {
-      bounds = panelBoundsFallback();
-      nodes.root.dataset.workspace = "fallback";
+    if (!workspace) {
+      nodes.root.hidden = true;
+      nodes.root.dataset.workspace = "missing";
       setDiagnostics({ workspaceDetected: false });
+      return;
     }
 
+    var rect = workspace.getBoundingClientRect();
+    var bounds = {
+      left: Math.max(8, rect.left),
+      right: Math.max(8, window.innerWidth - rect.right),
+    };
+    nodes.root.hidden = false;
+    nodes.root.dataset.workspace = "detected";
+    setDiagnostics({ workspaceDetected: true });
     nodes.root.style.setProperty("--jigma-left", Math.round(bounds.left) + "px");
     nodes.root.style.setProperty("--jigma-right", Math.round(bounds.right) + "px");
     nodes.root.style.setProperty("--jigma-bottom", "0px");
-    if (nodes.workspaceNotice) {
-      nodes.workspaceNotice.hidden = !bounds.fallback;
-    }
   }
 
   function observeWorkspace() {
@@ -729,18 +745,21 @@
 
   function setDockState(nextState) {
     ui.dockState = nextState;
-    persistUi();
+    if (ui.rememberDockState) persistUi();
+    else storageSet(UI_KEY, JSON.stringify(Object.assign({}, ui, { dockState: defaultUi.dockState })));
     syncDockState();
   }
 
   function syncDockState() {
     if (["expanded", "collapsed", "hidden"].indexOf(ui.dockState) === -1) {
-      ui.dockState = "expanded";
+      ui.dockState = defaultUi.dockState;
       persistUi();
     }
     nodes.dock.classList.toggle("is-collapsed", ui.dockState === "collapsed");
     nodes.dock.classList.toggle("is-hidden", ui.dockState === "hidden");
     nodes.launcher.hidden = ui.dockState !== "hidden";
+    nodes.collapse.textContent = ui.dockState === "collapsed" ? "Expand" : "Collapse";
+    nodes.collapse.title = ui.dockState === "collapsed" ? "Expand Jigma dock" : "Collapse dock - Escape";
     nodes.collapse.setAttribute("aria-expanded", ui.dockState === "expanded" ? "true" : "false");
     nodes.dock.style.setProperty("--jigma-dock-height", Math.max(180, Math.min(ui.dockHeight, Math.round(window.innerHeight * 0.65))) + "px");
     setDiagnostics({ dockState: ui.dockState, rootFound: Boolean(nodes.root), mounted: Boolean(nodes.root) });
@@ -823,9 +842,10 @@
 
   function updateTarget() {
     state.target = JigmaBricksInsertAdapter.inspect().selectedTarget;
-    nodes.target.textContent = "Target: " + state.target.shortLabel;
+    nodes.target.textContent = state.target.id ? state.target.shortLabel : "No target selected";
     nodes.target.title = "Target: " + state.target.label;
     nodes.target.classList.toggle("is-ready", Boolean(state.target.acceptsChildren));
+    nodes.target.classList.toggle("is-empty", !state.target.id);
     updateStatus();
   }
 
@@ -840,16 +860,16 @@
 
   function statusText() {
     if (!state.target || !state.target.id) {
-      state.statusKind = "blocked";
-      return "Blocked \u00b7 No selected target";
+      state.statusKind = "neutral";
+      return "No target selected";
     }
     if (!state.target.exists || !state.target.acceptsChildren) {
       state.statusKind = "blocked";
-      return "Blocked \u00b7 " + state.target.message;
+      return state.target.message;
     }
     if (!state.lastRun) {
-      state.statusKind = "ready";
-      return "Ready";
+      state.statusKind = "target";
+      return "Target selected";
     }
     if (state.pageStylesDecision === "" || warningCountByCode(/signature|asset|unresolved|sanitize|sanit/i) > 0) {
       state.statusKind = "review";
@@ -873,6 +893,7 @@
       nodes.status.textContent = statusText();
     }
     nodes.status.dataset.status = state.statusKind;
+    nodes.target.dataset.status = state.target && state.target.acceptsChildren ? "target" : state.statusKind;
     nodes.insert.disabled = !canInsert();
     nodes.jsBadge.textContent = state.js.trim() ? "Review required" : "None";
     nodes.jsBadge.dataset.status = state.js.trim() ? "review" : "idle";
@@ -1177,7 +1198,6 @@
   function renderSettingsModal(body) {
     body.append(
       settingsSection("General", [
-        toggleRow("Live analysis", "Re-run Jigma validation as you type. This never inserts content automatically.", "liveAnalysis"),
         toggleRow("Confirm before insertion", "", "confirmBeforeInsert"),
         toggleRow("Restore last workspace", "", "restoreLastWorkspace"),
         toggleRow("Clear after successful insertion", "", "clearAfterInsert"),
@@ -1187,6 +1207,9 @@
       exportSettingsSection(),
       toolsSection()
     );
+    if (ui.showDiagnostics) {
+      body.appendChild(diagnosticsSection());
+    }
   }
 
   function settingsSection(title, rows) {
@@ -1208,6 +1231,27 @@
       ui[key] = input.checked;
       persistUi();
       if (key === "liveAnalysis") scheduleLiveAnalysis();
+      if (key === "showDiagnostics") renderSettingsModalRefresh();
+    });
+    row.append(text, input);
+    return row;
+  }
+
+  function defaultCollapsedRow() {
+    var row = el("label", "jigma-setting-row");
+    var text = el("span", "jigma-setting-row__text");
+    text.appendChild(el("strong", "", "Default collapsed"));
+    text.appendChild(el("small", "", "Open Jigma as a slim bottom bar when Bricks loads."));
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !ui.openExpandedOnLoad;
+    input.addEventListener("change", function () {
+      ui.openExpandedOnLoad = !input.checked;
+      if (!ui.rememberDockState) {
+        ui.dockState = input.checked ? "collapsed" : "expanded";
+        syncDockState();
+      }
+      persistUi();
     });
     row.append(text, input);
     return row;
@@ -1279,7 +1323,8 @@
       closeModal();
       setDockState("hidden");
     });
-    section.append(toggleRow("Open expanded on builder load", "", "openExpandedOnLoad"));
+    section.append(defaultCollapsedRow());
+    section.append(toggleRow("Remember dock state", "Persist expanded, collapsed, or hidden state in this browser.", "rememberDockState"));
     section.append(toggleRow("Remember editor widths", "", "rememberEditorWidths"));
     section.append(resetWidths, restoreLayout, hideDock);
     return section;
@@ -1345,7 +1390,22 @@
       syncEditors();
       renderSettingsModalRefresh();
     });
+    section.append(toggleRow("Show diagnostics", "Show safe local mount and update diagnostics in this settings view.", "showDiagnostics"));
     section.append(quickImport, saved, reset);
+    return section;
+  }
+
+  function diagnosticsSection() {
+    var section = settingsSection("Diagnostics", []);
+    var payload = {
+      mounted: Boolean(nodes.root),
+      workspaceDetected: Boolean(diagnostics && diagnostics.workspaceDetected),
+      dockState: ui.dockState,
+      pluginVersion: config.version || "",
+      target: state.target && state.target.shortLabel ? state.target.shortLabel : "none",
+    };
+    var pre = el("pre", "jigma-diagnostics", JSON.stringify(payload, null, 2));
+    section.appendChild(pre);
     return section;
   }
 
@@ -1404,22 +1464,20 @@
 
     var dock = el("section", "jigma-dock");
     dock.setAttribute("aria-label", "Jigma Bricks dock");
-    var workspaceNotice = el("p", "jigma-workspace-warning", "Jigma could not detect the Bricks workspace. Using safe bottom fallback.");
-    workspaceNotice.hidden = true;
 
     var toolbar = el("header", "jigma-toolbar");
     var brand = el("div", "jigma-brand");
-    var mark = el("span", "jigma-brand__mark", "J");
+    var mark = el("span", "jigma-brand__mark", "Jg");
     var wordmark = el("strong", "", "Jigma");
-    var target = el("span", "jigma-target", "Target: No target selected");
-    var status = el("button", "jigma-status", "Blocked \u00b7 No selected target");
+    var target = el("span", "jigma-target is-empty", "No target selected");
+    var status = el("button", "jigma-status", "No target selected");
     var actions = el("div", "jigma-actions");
-    var run = el("button", "jigma-button", config.runPreviewLabel || "Run");
-    var insert = el("button", "jigma-button jigma-button--primary", config.insertLabel || "Insert into Selected");
-    var copy = el("button", "jigma-button", config.copyLabel || "Copy Structure");
-    var save = el("button", "jigma-button", "Save Section");
-    var settings = el("button", "jigma-icon-button", "Settings");
-    var collapse = el("button", "jigma-icon-button", "Collapse");
+    var run = el("button", "jigma-button jigma-button--preview jigma-action-primary", "Preview");
+    var insert = el("button", "jigma-button jigma-button--primary jigma-action-primary", config.insertLabel || "Insert into Selected");
+    var copy = el("button", "jigma-button jigma-action-secondary", config.copyLabel || "Copy Structure");
+    var save = el("button", "jigma-button jigma-action-secondary", "Save Section");
+    var settings = el("button", "jigma-icon-button jigma-action-tertiary", "Settings");
+    var collapse = el("button", "jigma-icon-button jigma-action-tertiary jigma-expand-toggle", "Collapse");
     var tabs = el("div", "jigma-tabs");
     var editorsWrap = el("div", "jigma-editors");
     var gutters = el("div", "jigma-editor-gutters");
@@ -1445,7 +1503,6 @@
       root: root,
       dock: dock,
       launcher: launcher,
-      workspaceNotice: workspaceNotice,
       target: target,
       status: status,
       run: run,
@@ -1480,8 +1537,8 @@
       if (kind === "js") nodes.jsBadge = editor.badge;
     });
 
-    setInitStage("render-fallback-dock");
-    dock.append(resize, toolbar, workspaceNotice, tabs, editorsWrap, gutters, drawer);
+    setInitStage("render-dock");
+    dock.append(resize, toolbar, tabs, editorsWrap, gutters, drawer);
     root.append(dock, launcher);
     setInitStage("append-root");
     document.body.appendChild(root);
@@ -1525,15 +1582,15 @@
     window.setInterval(updateTarget, 1200);
 
     setInitStage("sync-state");
-    root.dataset.workspace = "fallback";
+    root.dataset.workspace = "detected";
     syncDockState();
     syncEditors();
     renderReviewDrawer();
     window.requestAnimationFrame(function () {
       try {
         setInitStage("workspace-detection");
-        observeWorkspace();
         updateDockBounds();
+        observeWorkspace();
       } catch (error) {
         reportInitializationError("workspace-detection", error);
       }
@@ -1602,12 +1659,29 @@
 
   waitForBody(function () {
     try {
-      setInitStage("mount");
+      setInitStage("builder-context");
       setDiagnostics({
         configLoaded: Boolean(window.JigmaBricksPlugin),
         coreLoaded: Boolean(window.JigmaCore && typeof window.JigmaCore.convertToBricksCompatibility === "function"),
       });
-      mountPanel();
+      if (!isRealBricksBuilderContext()) {
+        abortMount("not-builder-context");
+        return;
+      }
+      window.JigmaBricksPanelLoaded = true;
+      setInitStage("workspace-ready");
+      waitForWorkspace(function (workspace) {
+        try {
+          if (!workspace) {
+            abortMount("missing-bricks-workspace");
+            return;
+          }
+          setInitStage("mount");
+          mountPanel();
+        } catch (error) {
+          reportInitializationError(initStage, error);
+        }
+      });
     } catch (error) {
       reportInitializationError(initStage, error);
     }
