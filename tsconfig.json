@@ -18,5 +18,5 @@
     "allowImportingTsExtensions": true,
     "types": ["vite/client", "vitest/globals"]
   },
-  "include": ["src", "lib", "types", "tests", "vite.config.ts"]
+  "include": ["src", "lib", "types", "tests", "vite.config.ts", "vite.plugin-core.config.ts"]
 }

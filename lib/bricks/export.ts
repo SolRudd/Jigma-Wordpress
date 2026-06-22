@@ -39,8 +39,10 @@ import {
   type ElementCssTarget,
 } from "../css/element.ts";
 import { scopeCssToBem, type CssSelectorScopeMap } from "../css/scope.ts";
+import { BRICKS_COMPATIBILITY_SCHEMA_VERSION } from "./compatibility-schema.ts";
 
 export const TARGET_BRICKS_VERSION = "2.3.7";
+export { BRICKS_COMPATIBILITY_SCHEMA_VERSION };
 
 const HIDDEN_STRUCTURE_TAGS = new Set([
   "script",

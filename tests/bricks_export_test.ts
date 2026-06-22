@@ -4,10 +4,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   createBricksExport,
+  BRICKS_COMPATIBILITY_SCHEMA_VERSION,
   serializeBricksClipboardPayload,
   serializeJigmaDebugReport,
   TARGET_BRICKS_VERSION,
 } from "../lib/bricks/export.ts";
+import {
+  convertToBricksCompatibility,
+  detectPageLevelCss,
+} from "../lib/plugin/jigma-core.ts";
 import { createAssetManifest } from "../lib/assets/manifest.ts";
 import { BRICKS_ELEMENT_CUSTOM_CSS_FIELD } from "../lib/css/element.ts";
 import { inspectDependencies } from "../lib/dependencies/inspect.ts";
@@ -2533,12 +2538,33 @@ describe("Bricks export", () => {
     }).Deno.readTextFileSync;
     const php = readTextFileSync("jigma-bricks/jigma-bricks.php");
     const panelJs = readTextFileSync("jigma-bricks/assets/jigma-bricks.js");
+    const coreEntry = readTextFileSync("lib/plugin/jigma-core-entry.ts");
+    const coreWrapper = readTextFileSync("lib/plugin/jigma-core.ts");
+    const coreBundle = readTextFileSync("jigma-bricks/assets/jigma-core.js");
 
     expect(php).toContain("JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION");
+    expect(php).toContain("assets/jigma-core.js");
+    expect(php).toContain("'jigma-core'");
+    expect(php).toContain("'contentHash'");
+    expect(php).toContain("'contentSummary'");
     expect(php).toContain("jigma_bricks_validate_compatibility_payload");
     expect(php).toContain("'bricksCopiedElements' !== (string) $payload['source']");
     expect(php).toContain("'globalClasses'");
     expect(php).toContain("'globalElements'");
+    expect(php).toContain("jigma_bricks_element_accepts_children");
+    expect(php).toContain("jigma_bricks_element_is_locked");
+    expect(php).toContain("jigma_bricks_find_element_index");
+    expect(php).toContain("'targetId'");
+    expect(php).toContain("jigma_missing_selected_target");
+    expect(php).toContain("jigma_selected_target_not_nestable");
+    expect(php).toContain("jigma_selected_target_locked");
+    expect(php).toContain("jigma_no_selected_target_roots");
+    expect(php).toContain("jigma_content_version_changed");
+    expect(php).toContain("$target_id");
+    expect(php).toContain("? $target_id");
+    expect(php).toContain("'insertedRootIds'");
+    expect(php).toContain("Jigma Page Styles");
+    expect(php).toContain("jigma_bricks_apply_page_styles");
     expect(php).toContain("bricks_global_classes");
     expect(php).toContain("jigma_bricks_merge_global_classes");
     expect(php).toContain("update_option( jigma_bricks_get_global_classes_option_name()");
@@ -2557,21 +2583,83 @@ describe("Bricks export", () => {
     expect(php).toContain("JavaScript signature required");
     expect(php).toContain("bricks/security_check_before_save/new_elements");
     expect(php).not.toContain("|| '_cssGlobalClasses' === $key");
-    expect(panelJs).toContain("compatibilitySchemaVersion");
-    expect(panelJs).toContain("globalClasses: globalClasses");
-    expect(panelJs).toContain("globalElements: []");
-    expect(panelJs).toContain('source: "bricksCopiedElements"');
-    expect(panelJs).toContain("sourceUrl: sourceUrl");
-    expect(panelJs).toContain("settings._cssGlobalClasses");
-    expect(panelJs).toContain("javascriptCode: state.js");
-    expect(panelJs).toContain("executeCode: false");
-    expect(panelJs).toContain("Jigma Section JavaScript");
-    expect(panelJs).toContain("Include JavaScript in Bricks");
+    expect(panelJs).toContain("window.JigmaCore.convertToBricksCompatibility");
+    expect(panelJs).toContain("Insert into Selected");
+    expect(panelJs).toContain("Select a container in Bricks before inserting.");
+    expect(panelJs).toContain("The selected element cannot contain children.");
+    expect(panelJs).toContain("targetId");
+    expect(panelJs).toContain("pageStylesCss");
+    expect(panelJs).toContain("contentHash");
+    expect(panelJs).toContain("Save Section");
+    expect(panelJs).toContain("Duplicate Section");
+    expect(panelJs).toContain("keydown");
+    expect(panelJs).not.toContain("Ctrl + Shift + R");
+    expect(panelJs).not.toContain("Meta + Shift + R");
+    expect(panelJs).not.toContain("function createTargets");
+    expect(panelJs).not.toContain("function attachCss");
+    expect(panelJs).not.toContain("function parseHtml");
+    expect(panelJs).not.toContain("new DOMParser");
     expect(panelJs).not.toContain("Jigma Component Styles");
     expect(panelJs).not.toContain("jigmaMeta:");
-    expect(panelJs).toContain("nativeStyleMappedCount");
     expect(panelJs).not.toContain("_exists");
     expect(panelJs).not.toContain("_jigmaPluginPoc");
+    expect(coreEntry).toContain("window.JigmaCore");
+    expect(coreWrapper).toContain("createBricksExport");
+    expect(coreWrapper).toContain("serializeBricksClipboardPayload");
+    expect(coreWrapper).toContain("BRICKS_COMPATIBILITY_SCHEMA_VERSION");
+    expect(coreBundle).toContain("window.JigmaCore");
+    expect(coreBundle).toContain("bricks-compatibility.v1");
+  });
+
+  it("uses the shared Jigma Core wrapper for plugin payloads", () => {
+    const standalone = serializeBricksClipboardPayload(exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions));
+    const plugin = convertToBricksCompatibility({
+      html: featureCtaHtml,
+      css: featureCtaCss,
+      js: "",
+      projectPrefix: "jg",
+      blockName: "section",
+    });
+
+    expect(plugin.schemaVersion).toBe(BRICKS_COMPATIBILITY_SCHEMA_VERSION);
+    expect(plugin.targetBricksVersion).toBe(TARGET_BRICKS_VERSION);
+    expect(plugin.payload).toEqual(standalone);
+    expect(Object.keys(plugin.payload).sort()).toEqual([
+      "content",
+      "globalClasses",
+      "globalElements",
+      "source",
+      "sourceUrl",
+      "version",
+    ]);
+    expect(JSON.stringify(plugin.payload)).not.toContain("diagnostics");
+    expect(JSON.stringify(plugin.payload)).not.toContain("assetManifest");
+    expect(JSON.stringify(plugin.payload)).not.toContain("classAudit");
+  });
+
+  it("routes page-level CSS separately without moving class CSS into page styles", () => {
+    const review = detectPageLevelCss(`:root { --brand: #7957ff; }
+body { margin: 0; }
+@font-face { font-family: Test; src: url("/test.woff2"); }
+@keyframes pulse { to { opacity: 1; } }
+@keyframes pulse { to { opacity: 1; } }
+.component { color: white; }
+.component:hover .component__icon { opacity: 1; }`);
+
+    expect(review.ruleCount).toBe(4);
+    expect(review.css).toContain(":root");
+    expect(review.css).toContain("body");
+    expect(review.css).toContain("@font-face");
+    expect(review.css).toContain("@keyframes pulse");
+    expect(review.css.match(/@keyframes pulse/g)).toHaveLength(1);
+    expect(review.css).not.toContain(".component {");
+    expect(review.css).not.toContain(".component:hover .component__icon");
+    expect(review.groups.map((group) => group.type)).toEqual([
+      "root",
+      "document",
+      "font-face",
+      "keyframes",
+    ]);
   });
 
   it("produces the Feature CTA payload the plugin adapter must insert without class loss", () => {

@@ -1,5 +1,14 @@
 # Changelog
 
+## Jigma selected-target Bricks plugin beta - 2026-06-22
+
+- Bumped the WordPress plugin beta to `0.2.0-beta`.
+- Added a bundled Jigma Core browser asset for the plugin and removed the plugin panel's duplicate browser conversion implementation.
+- Replaced the floating POC panel with a compact resizable Bricks dock focused on HTML, CSS, JavaScript, Run, Insert into Selected, Copy Structure, and Saved Sections.
+- Required an explicit selected, nestable Bricks target before insertion and removed component page-root fallback.
+- Added selected-target ID remapping, target children updates, content hash checks, locked/non-nestable target blocking, and post-filter class-reference validation.
+- Added a controlled `Jigma Page Styles` route for confirmed page-level CSS while keeping class-owned CSS on global class records.
+
 ## Jigma Bricks plugin compatibility adapter - 2026-06-22
 
 - Bumped the WordPress plugin POC to `0.1.1`.
