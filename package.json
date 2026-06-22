@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:visual": "playwright test --config=playwright.config.ts",
     "test:visual:update": "playwright test --config=playwright.config.ts --update-snapshots",
+    "release:jigma-bricks": "node scripts/release-jigma-bricks.mjs",
     "release:check": "npm run typecheck && npm run test && npm run build && npm audit --json > reports/package-audit.json"
   },
   "dependencies": {

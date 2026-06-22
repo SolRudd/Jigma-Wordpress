@@ -2,8 +2,9 @@
 /**
  * Plugin Name: Jigma Bricks
  * Plugin URI: https://jigma.co.uk/
+ * Update URI: https://jigma.co.uk/jigma-bricks
  * Description: Focused Jigma beta dock for converting HTML, CSS, and optional JavaScript into Bricks Builder structures.
- * Version: 0.2.2-beta
+ * Version: 0.2.3-beta
  * Author: Jigma
  * Text Domain: jigma-bricks
  * Requires at least: 6.4
@@ -14,12 +15,21 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JIGMA_BRICKS_VERSION', '0.2.2-beta' );
+define( 'JIGMA_BRICKS_VERSION', '0.2.3-beta' );
 define( 'JIGMA_BRICKS_TARGET_VERSION', '2.3.7' );
 define( 'JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION', 'bricks-compatibility.v1' );
 define( 'JIGMA_BRICKS_PLUGIN_FILE', __FILE__ );
 define( 'JIGMA_BRICKS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'JIGMA_BRICKS_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+
+$jigma_bricks_updater_file = JIGMA_BRICKS_PLUGIN_DIR . 'includes/class-jigma-plugin-updater.php';
+if ( is_readable( $jigma_bricks_updater_file ) ) {
+	require_once $jigma_bricks_updater_file;
+
+	if ( class_exists( 'Jigma_Bricks_Plugin_Updater' ) ) {
+		Jigma_Bricks_Plugin_Updater::register( JIGMA_BRICKS_PLUGIN_FILE, JIGMA_BRICKS_VERSION );
+	}
+}
 
 /**
  * Detects Bricks without requiring one specific implementation detail.

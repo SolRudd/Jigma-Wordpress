@@ -1,0 +1,12 @@
+{
+  "name": "Jigma Bricks",
+  "slug": "jigma-bricks",
+  "version": "0.2.3-beta",
+  "download_url": "https://jigma.co.uk/releases/jigma-bricks/jigma-bricks-0.2.3-beta.zip",
+  "homepage": "https://jigma.co.uk/",
+  "requires": "6.4",
+  "requires_php": "7.4",
+  "tested": "",
+  "sha256": "1b3590abd651ead4b6670ad87099c78fa951c6c020685e435d13c78c6700273b",
+  "changelog": "Jigma Bricks 0.2.3-beta adds first-party hosted WordPress plugin updates from jigma.co.uk."
+}

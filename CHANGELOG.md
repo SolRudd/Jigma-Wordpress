@@ -1,5 +1,12 @@
 # Changelog
 
+## Jigma hosted plugin updates - 2026-06-22
+
+- Bumped the WordPress plugin beta to `0.2.3-beta`.
+- Added a first-party WordPress update adapter for the `https://jigma.co.uk/jigma-bricks` Update URI.
+- Added hosted release metadata support at `https://jigma.co.uk/releases/jigma-bricks/latest.json`.
+- Added a release script for version checks, plugin core build, tests, production build, syntax checks, optional PHP lint, release ZIP creation, checksum generation, and `latest.json`.
+
 ## Jigma Bricks real-builder loading fix - 2026-06-22
 
 - Bumped the WordPress plugin beta to `0.2.2-beta`.

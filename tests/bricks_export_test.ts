@@ -1,6 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   createBricksExport,
@@ -77,6 +79,101 @@ const defaultOptions: OutputOptions = {
   includeExternalScripts: false,
   minifyElementCss: false,
 };
+
+type JigmaLatestJson = {
+  name: string;
+  slug: string;
+  version: string;
+  download_url: string;
+  homepage: string;
+  requires: string;
+  requires_php: string;
+  tested: string;
+  sha256: string;
+  changelog: string;
+};
+
+function validateLatestJson(input: unknown): JigmaLatestJson | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const value = input as Record<string, unknown>;
+  const name = typeof value.name === "string" ? value.name : "";
+  const slug = typeof value.slug === "string" ? value.slug : "";
+  const version = typeof value.version === "string" ? value.version : "";
+  const downloadUrl = typeof value.download_url === "string" ? value.download_url : "";
+  const homepage = typeof value.homepage === "string" ? value.homepage : "";
+  const requires = typeof value.requires === "string" ? value.requires : "";
+  const requiresPhp = typeof value.requires_php === "string" ? value.requires_php : "";
+  const tested = typeof value.tested === "string" ? value.tested : "";
+  const sha256 = typeof value.sha256 === "string" ? value.sha256 : "";
+  const changelog = typeof value.changelog === "string" ? value.changelog : "";
+
+  let packageUrl: URL;
+  try {
+    packageUrl = new URL(downloadUrl);
+  } catch {
+    return null;
+  }
+
+  if (
+    name !== "Jigma Bricks" ||
+    slug !== "jigma-bricks" ||
+    !/^\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(version) ||
+    packageUrl.protocol !== "https:" ||
+    packageUrl.hostname !== "jigma.co.uk" ||
+    (sha256 !== "" && !/^[a-f0-9]{64}$/i.test(sha256))
+  ) {
+    return null;
+  }
+
+  return {
+    name,
+    slug,
+    version,
+    download_url: downloadUrl,
+    homepage,
+    requires,
+    requires_php: requiresPhp,
+    tested,
+    sha256: sha256.toLowerCase(),
+    changelog,
+  };
+}
+
+function compareJigmaVersions(a: string, b: string): number {
+  const parse = (version: string) => {
+    const [base, pre = ""] = version.split(/[-+]/, 2);
+    return {
+      numbers: base.split(".").map((part) => Number(part)),
+      pre,
+    };
+  };
+  const left = parse(a);
+  const right = parse(b);
+  const max = Math.max(left.numbers.length, right.numbers.length);
+  for (let index = 0; index < max; index += 1) {
+    const delta = (left.numbers[index] || 0) - (right.numbers[index] || 0);
+    if (delta !== 0) return delta;
+  }
+  if (left.pre === right.pre) return 0;
+  if (!left.pre) return 1;
+  if (!right.pre) return -1;
+  return left.pre.localeCompare(right.pre);
+}
+
+function createHostedUpdateResponse(localVersion: string, metadata: unknown) {
+  const latest = validateLatestJson(metadata);
+  if (!latest || compareJigmaVersions(latest.version, localVersion) <= 0) return null;
+  return {
+    id: "https://jigma.co.uk/jigma-bricks",
+    slug: "jigma-bricks",
+    plugin: "jigma-bricks/jigma-bricks.php",
+    version: latest.version,
+    url: latest.homepage,
+    package: latest.download_url,
+    tested: latest.tested,
+    requires_php: latest.requires_php,
+  };
+}
 
 const featureCtaHtml = readFileSync(
   new URL("./fixtures/compatibility/feature-cta.html", import.meta.url),
@@ -2542,7 +2639,10 @@ describe("Bricks export", () => {
 
     expect(php).toContain("JIGMA_BRICKS_COMPATIBILITY_SCHEMA_VERSION");
     expect(php).toContain("Plugin URI: https://jigma.co.uk/");
-    expect(php).toContain("0.2.2-beta");
+    expect(php).toContain("Update URI: https://jigma.co.uk/jigma-bricks");
+    expect(php).toContain("0.2.3-beta");
+    expect(php).toContain("class-jigma-plugin-updater.php");
+    expect(php).toContain("Jigma_Bricks_Plugin_Updater::register");
     expect(php).toContain("assets/jigma-core.js");
     expect(php).toContain("'jigma-core'");
     expect(php).toContain("array( 'jigma-core' )");
@@ -2703,6 +2803,76 @@ describe("Bricks export", () => {
     expect(coreWrapper).toContain("BRICKS_COMPATIBILITY_SCHEMA_VERSION");
     expect(coreBundle).toContain("window.JigmaCore");
     expect(coreBundle).toContain("bricks-compatibility.v1");
+  });
+
+  it("supports first-party hosted WordPress plugin updates safely", () => {
+    const pluginPhp = readFileSync("jigma-bricks/jigma-bricks.php", "utf8");
+    const updaterPhp = readFileSync("jigma-bricks/includes/class-jigma-plugin-updater.php", "utf8");
+    const latest = validateLatestJson(JSON.parse(readFileSync("releases/jigma-bricks/latest.json", "utf8")));
+    const versionedZip = "releases/jigma-bricks/jigma-bricks-0.2.3-beta.zip";
+    const rootZip = "jigma-bricks.zip";
+
+    expect(pluginPhp).toContain("Update URI: https://jigma.co.uk/jigma-bricks");
+    expect(pluginPhp).toContain("Version: 0.2.3-beta");
+    expect(pluginPhp).toContain("define( 'JIGMA_BRICKS_VERSION', '0.2.3-beta' );");
+    expect(updaterPhp).toContain("add_filter( 'update_plugins_jigma.co.uk'");
+    expect(updaterPhp).toContain("add_filter( 'plugins_api'");
+    expect(updaterPhp).toContain("https://jigma.co.uk/releases/jigma-bricks/latest.json");
+    expect(updaterPhp).toContain("wp_remote_get");
+    expect(updaterPhp).toContain("'timeout'     => 8");
+    expect(updaterPhp).toContain("get_site_transient");
+    expect(updaterPhp).toContain("set_site_transient");
+    expect(updaterPhp).toContain("if ( is_wp_error( $response ) )");
+    expect(updaterPhp).toContain("200 !== $status");
+    expect(updaterPhp).toContain("json_decode( $body, true )");
+    expect(updaterPhp).toContain("validate_release_metadata");
+    expect(updaterPhp).toContain("if ( ! is_array( $metadata ) )");
+    expect(updaterPhp).toContain("return null;");
+    expect(updaterPhp).toContain("return false;");
+    expect(updaterPhp).toContain("version_compare");
+    expect(updaterPhp).toContain("'id'           => self::UPDATE_ID");
+    expect(updaterPhp).toContain("'slug'         => self::SLUG");
+    expect(updaterPhp).toContain("'plugin'       => $this->plugin_basename");
+    expect(updaterPhp).toContain("'version'      => $metadata['version']");
+    expect(updaterPhp).toContain("'url'          => $metadata['homepage']");
+    expect(updaterPhp).toContain("'package'      => $metadata['download_url']");
+    expect(updaterPhp).toContain("'tested'       => $metadata['tested']");
+    expect(updaterPhp).toContain("'requires_php' => $metadata['requires_php']");
+    expect(updaterPhp).toContain("return 'https' === $scheme && self::UPDATE_HOST === strtolower");
+
+    expect(latest).not.toBeNull();
+    const validLatest = latest!;
+    expect(validLatest.version).toBe("0.2.3-beta");
+    expect(validLatest.download_url).toBe("https://jigma.co.uk/releases/jigma-bricks/jigma-bricks-0.2.3-beta.zip");
+    expect(createHostedUpdateResponse("0.2.2-beta", validLatest)?.version).toBe("0.2.3-beta");
+    expect(createHostedUpdateResponse("0.2.3-beta", validLatest)).toBeNull();
+    expect(createHostedUpdateResponse("0.2.4-beta", validLatest)).toBeNull();
+    expect(validateLatestJson(null)).toBeNull();
+    expect(validateLatestJson("not-json")).toBeNull();
+    expect(validateLatestJson({ ...validLatest, download_url: "http://jigma.co.uk/releases/jigma-bricks.zip" })).toBeNull();
+    expect(validateLatestJson({ ...validLatest, download_url: "https://example.com/jigma-bricks.zip" })).toBeNull();
+    expect(createHostedUpdateResponse("0.2.2-beta", { ...validLatest, download_url: "https://example.com/jigma-bricks.zip" })).toBeNull();
+
+    expect(existsSync(versionedZip)).toBe(true);
+    expect(existsSync(rootZip)).toBe(true);
+    const versionedChecksum = createHash("sha256").update(readFileSync(versionedZip)).digest("hex");
+    const rootChecksum = createHash("sha256").update(readFileSync(rootZip)).digest("hex");
+    expect(validLatest.sha256).toBe(versionedChecksum);
+    expect(rootChecksum).toBe(versionedChecksum);
+
+    const zipEntries = execFileSync("unzip", ["-Z1", versionedZip], { encoding: "utf8" })
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+    expect(new Set(zipEntries.map((entry) => entry.split("/")[0]))).toEqual(new Set(["jigma-bricks"]));
+    expect(zipEntries).toContain("jigma-bricks/jigma-bricks.php");
+    expect(zipEntries).toContain("jigma-bricks/assets/jigma-core.js");
+    expect(zipEntries).toContain("jigma-bricks/assets/jigma-bricks.js");
+    expect(zipEntries).toContain("jigma-bricks/assets/jigma-bricks.css");
+    expect(zipEntries).toContain("jigma-bricks/includes/class-jigma-plugin-updater.php");
+    expect(zipEntries.some((entry) => entry.includes("node_modules/"))).toBe(false);
+    expect(zipEntries.some((entry) => entry.includes(".git/"))).toBe(false);
+    expect(zipEntries.some((entry) => entry.includes("tests/"))).toBe(false);
   });
 
   it("keeps the Bricks plugin dock isolated and explicit-action only", () => {
