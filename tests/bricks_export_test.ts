@@ -207,6 +207,14 @@ const processLightReference = JSON.parse(readFileSync(
   globalClasses: string[];
   globalElements: unknown[];
 };
+const bbSystemShellHtml = readFileSync(
+  new URL("./fixtures/bb-system-shell/source.html", import.meta.url),
+  "utf8",
+);
+const bbSystemShellCss = readFileSync(
+  new URL("./fixtures/bb-system-shell/source.css", import.meta.url),
+  "utf8",
+);
 
 const compatibilityOptions: Partial<OutputOptions> = {
   exportProfile: "bricks-compatibility",
@@ -697,6 +705,97 @@ describe("Bricks export", () => {
     expect(JSON.stringify(clipboard)).not.toContain("jigmaMeta");
     expect(JSON.stringify(clipboard)).not.toContain("validation");
     expect(JSON.stringify(clipboard)).not.toContain("warnings");
+  });
+
+  it("preserves real bb-system-shell inline content, modifiers, semantics, and responsive class CSS", () => {
+    const result = exportFor(bbSystemShellHtml, bbSystemShellCss, "", compatibilityOptions);
+    const clipboard = serializeBricksClipboardPayload(result);
+    const root = getElementByBemClass(result, "bb-system-shell")!;
+    const eyebrow = getElementByBemClass(result, "bb-system-shell__eyebrow")!;
+    const heading = getElementByBemClass(result, "bb-system-shell__heading")!;
+    const cardLabel = getElementByBemClass(result, "bb-system-card__label")!;
+    const activeCard = result.content.find((element) =>
+      getElementGlobalClassNames(result, element).includes("bb-system-card--active")
+    )!;
+    const articles = getElementsByBemClass(result, "bb-system-card");
+    const stats = getElementsByBemClass(result, "bb-system-stat");
+    const links = result.content.filter((element) =>
+      element.name === "text-link" && element.settings.text === "→"
+    );
+    const eyebrowChildren = result.content.filter((element) => element.parent === eyebrow.id);
+    const preservedEyebrowSpan = eyebrowChildren.find((element) =>
+      element.name === "div" &&
+      element.settings.tag === "span" &&
+      !("text" in element.settings)
+    );
+    const eyebrowText = eyebrowChildren.find((element) =>
+      element.name === "text-basic" &&
+      element.settings.tag === "span" &&
+      element.settings.text === "02 · SYSTEMS BUILT TO SCALE"
+    );
+    const classIds = new Set((result.globalClasses ?? []).map((entry) => entry.id));
+    const referencedClassIds = result.content.flatMap((element) =>
+      Array.isArray(element.settings._cssGlobalClasses)
+        ? element.settings._cssGlobalClasses.map((id) => `${id}`)
+        : []
+    );
+    const contentJson = JSON.stringify(result.content);
+
+    expect(root.name).toBe("section");
+    expect(root.parent).toBe(0);
+    expect(preservedEyebrowSpan).toBeDefined();
+    expect(eyebrowText).toBeDefined();
+    expect(eyebrow.children).toEqual([preservedEyebrowSpan!.id, eyebrowText!.id]);
+    expect(getGlobalClassCss(result, "bb-system-shell__eyebrow")).toContain(".bb-system-shell__eyebrow span");
+
+    expect(heading.name).toBe("heading");
+    expect(heading.children).toEqual([]);
+    expect(heading.settings.tag).toBe("h2");
+    expect(heading.settings.text).toBe(
+      "Built like a website. <strong>Powered like a system.</strong>",
+    );
+
+    expect(getElementGlobalClassNames(result, activeCard)).toEqual([
+      "bb-system-card",
+      "bb-system-card--active",
+    ]);
+    expect(getGlobalClassCss(result, "bb-system-card--active")).toContain(".bb-system-card--active");
+    expect(getGlobalClassCss(result, "bb-system-card--active")).toContain("@media (max-width: 900px)");
+    expect(result.content.find((element) =>
+      element.parent === cardLabel.id &&
+      element.name === "text-basic" &&
+      element.settings.text === "Core Focus"
+    )).toBeDefined();
+
+    ["▣", "ϟ", "▦", "↗", "◈", "◎", "→"].forEach((glyph) => {
+      expect(contentJson).toContain(glyph);
+    });
+    expect(links).toHaveLength(3);
+    links.forEach((link) => {
+      expect(link.settings.link).toEqual({ type: "internal", url: "#" });
+    });
+
+    expect(articles).toHaveLength(3);
+    articles.forEach((article) => {
+      expect(article.settings.tag).toBe("article");
+      expect(article.settings.customTag).toBe("article");
+    });
+    expect(stats).toHaveLength(4);
+    expect(contentJson).toContain("Pagespeed score average");
+    expect(contentJson).toContain("Average growth for clients");
+    expect(contentJson).toContain("Secure, optimised &amp; accessible");
+    expect(contentJson).toContain("Projects delivered worldwide");
+
+    expect(getGlobalClassCss(result, "bb-system-shell__inner")).toContain("@media (max-width: 900px)");
+    expect(getGlobalClassCss(result, "bb-system-shell__heading")).toContain("@media (max-width: 560px)");
+    expect(getGlobalClassCss(result, "bb-system-stats")).toContain("@media (max-width: 900px)");
+    expect(getGlobalClassCss(result, "bb-system-stats")).toContain("@media (max-width: 560px)");
+    expect(result.validation.classReferenceValid).toBe(true);
+    expect(result.validation.missingClassReferenceCount).toBe(0);
+    expect(referencedClassIds.every((id) => classIds.has(id))).toBe(true);
+    expect(result.content.every((element) => !("_cssClasses" in element.settings))).toBe(true);
+    expect(clipboard.globalClasses).toHaveLength(result.globalClasses?.length ?? 0);
+    expect(clipboard.content).toHaveLength(result.content.length);
   });
 
   it("defines the standalone HTML, CSS, and review-required JavaScript editors", () => {
@@ -2746,10 +2845,11 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("state.target.exists");
     expect(panelJs).toContain("state.target.acceptsChildren");
     expect(panelJs).toContain("state.pageStylesDecision");
-    expect(panelJs).toContain("Save Section");
-    expect(panelJs).toContain("Duplicate Section");
-    expect(panelJs).toContain("Import JSON");
-    expect(panelJs).toContain("Quick Import");
+    expect(panelJs).not.toContain('var save = el("button", "jigma-button jigma-action-secondary", "Save Section")');
+    expect(panelJs).not.toContain('var quickImport = el("button", "jigma-button", "Quick Import")');
+    expect(panelJs).not.toContain('var saved = el("button", "jigma-button", "Saved Sections")');
+    expect(panelJs).not.toContain('save.addEventListener("click", function ()');
+    expect(panelJs).not.toContain('event.key.toLowerCase() === "s" && modifier && alt');
     expect(panelJs).toContain("role\", \"dialog");
     expect(panelJs).toContain("aria-modal");
     expect(panelJs).toContain("modalFocusables");
@@ -2916,9 +3016,9 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("startEditorResize");
     expect(panelJs).toContain("Hide dock");
     expect(panelJs).toContain("normalizeVisibility");
-    expect(panelJs).toContain("splitCombinedSource");
     expect(panelJs).toContain("openSettingsModal");
-    expect(panelJs).toContain("openQuickImportModal");
+    expect(panelJs).not.toContain("splitCombinedSource");
+    expect(panelJs).not.toContain("openQuickImportModal");
     expect(panelJs).toContain("restoreLastWorkspace");
     expect(panelJs).toContain("Default collapsed");
     expect(panelJs).toContain("Remember dock state");
@@ -2930,7 +3030,7 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("Clear after successful insertion");
     expect(panelJs).toContain("Include page-level CSS");
     expect(panelJs).toContain("Class conflict behaviour");
-    expect(panelJs).toContain("Saved Sections");
+    expect(panelJs).not.toContain('state.drawerMode = "saved";');
     expect(panelJs).toContain("pageStylesReady");
     expect(panelJs).toContain("Run Jigma to generate a Bricks Compatibility payload.");
     expect(panelJs).toContain("Select a container in Bricks before inserting.");

@@ -250,6 +250,12 @@ function hasClassedPhrasingChild(element: ParsedElement): boolean {
   );
 }
 
+function shouldPreserveEmptyPhrasingElement(element: ParsedElement) {
+  return CLASS_OWNED_PHRASING_TAGS.has(element.tagName) &&
+    hasOnlyPhrasingContent(element) &&
+    !serializeInlineContent(element).trim();
+}
+
 function getBricksMapping(element: ParsedElement) {
   const tag = element.tagName;
   const text = getOwnText(element, 500);
@@ -300,6 +306,10 @@ function getBricksMapping(element: ParsedElement) {
 
   if (tag === "svg") {
     return { name: "svg", supported: true };
+  }
+
+  if (shouldPreserveEmptyPhrasingElement(element)) {
+    return { name: "div", supported: true, semanticTag: tag };
   }
 
   if (TEXT_TAGS.has(tag) && hasOnlyPhrasingContent(element) && !hasClassedPhrasingChild(element) && text) {
@@ -1242,53 +1252,79 @@ export function createBricksExport(input: ConversionInput): BricksExport {
 
     const directText = getOwnText(element, 500);
     const isTextElement = ["heading", "text-basic", "button", "text-link"].includes(mapping.name);
-    if (
-      conversionProfile === "fidelity" &&
+    const shouldCreateDirectTextElements =
       !isTextElement &&
-      directText
-    ) {
-      const textId = makeStableId(`${path}:direct-text:${directText}`);
-      const textClass = createGeneratedTextClass(bemFactory.blockName, assignment);
+      directText &&
+      (conversionProfile === "fidelity" || compatibilityProfile);
+    const addDirectTextElement = (text: string, sequence: number) => {
+      const normalizedText = text.replace(/\s+/g, " ").trim();
+      if (!normalizedText) {
+        return;
+      }
+      const textId = makeStableId(`${path}:direct-text:${sequence}:${normalizedText}`);
+      const textClass = conversionProfile === "fidelity"
+        ? createGeneratedTextClass(bemFactory.blockName, assignment)
+        : "";
+      const textClassList = textClass ? [textClass] : [];
       const textElement = applyBricksElementLabel({
         id: textId,
         name: "text-basic",
         parent: id,
         children: [],
         settings: {
-          text: directText,
-          ...(shouldCreateNativeBemClasses ? {} : { _cssClasses: textClass }),
+          text: normalizedText,
+          tag: "span",
+          ...(!shouldCreateNativeBemClasses && textClass ? { _cssClasses: textClass } : {}),
         },
-      }, createBricksElementLabel({
-        bemClass: textClass,
-        tagName: "span",
-        parentLabel: bricksElement.label,
-      }));
+      }, textClass
+        ? createBricksElementLabel({
+          bemClass: textClass,
+          tagName: "span",
+          parentLabel: bricksElement.label,
+        })
+        : `${bricksElement.label ?? "Element"} Text`);
       content.push(textElement);
       contentById.set(textId, textElement);
-      classListByElementId.set(textId, [textClass]);
-      generatedClassNames.push(textClass);
+      classListByElementId.set(textId, textClassList);
+      generatedClassNames.push(...textClassList);
       bricksElement.children.push(textId);
       generatedTextElementCount += 1;
-      classAttachmentCount += 1;
-    }
+      classAttachmentCount += textClassList.length;
+    };
 
     let visibleChildIndex = 0;
-    if (!NON_NESTABLE_BRICKS_ELEMENTS.has(mapping.name)) element.children.forEach((child) => {
-      if (element.tagName === "picture") {
-        return;
-      }
+    let directTextIndex = 0;
+    if (!NON_NESTABLE_BRICKS_ELEMENTS.has(mapping.name)) {
+      const walkChild = (child: ParsedElement) => {
+        if (element.tagName === "picture" || HIDDEN_STRUCTURE_TAGS.has(child.tagName)) {
+          return;
+        }
 
-      if (HIDDEN_STRUCTURE_TAGS.has(child.tagName)) {
-        return;
-      }
+        const childPath = `${path}-${visibleChildIndex}`;
+        visibleChildIndex += 1;
+        const childId = walkElement(child, id, childPath, [...ancestors, element]);
+        if (childId) {
+          bricksElement.children.push(childId);
+        }
+      };
 
-      const childPath = `${path}-${visibleChildIndex}`;
-      visibleChildIndex += 1;
-      const childId = walkElement(child, id, childPath, [...ancestors, element]);
-      if (childId) {
-        bricksElement.children.push(childId);
+      if (shouldCreateDirectTextElements && element.contentParts.length > 0) {
+        element.contentParts.forEach((part) => {
+          if (part.type === "text") {
+            addDirectTextElement(part.value, directTextIndex);
+            directTextIndex += 1;
+            return;
+          }
+
+          walkChild(part.element);
+        });
+      } else {
+        if (shouldCreateDirectTextElements) {
+          addDirectTextElement(directText, directTextIndex);
+        }
+        element.children.forEach(walkChild);
       }
-    });
+    }
 
     return id;
   };

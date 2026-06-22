@@ -295,7 +295,6 @@
       drawerOpen: false,
       drawerMode: "review",
       modal: null,
-      selectedSectionId: "",
       pageStylesDecision: "none",
       statusKind: "blocked",
     };
@@ -340,67 +339,6 @@
       return [];
     }
     return parsed;
-  }
-
-  function writeSavedSections(items) {
-    storageSet(SAVED_SECTIONS_KEY, JSON.stringify(items));
-  }
-
-  function currentSource(name) {
-    return {
-      id: "section-" + Date.now().toString(36),
-      name: name || "Jigma Section " + new Date().toLocaleString(),
-      updatedAt: new Date().toISOString(),
-      html: state.html,
-      css: state.css,
-      javascript: state.js,
-      prefix: "jg",
-      blockName: "section",
-    };
-  }
-
-  function saveCurrentSection() {
-    var items = readSavedSections();
-    var existingIndex = state.selectedSectionId
-      ? items.findIndex(function (item) { return item.id === state.selectedSectionId; })
-      : -1;
-    var next = currentSource(existingIndex >= 0 ? items[existingIndex].name : "");
-    if (existingIndex >= 0) {
-      next.id = state.selectedSectionId;
-      items[existingIndex] = next;
-    } else {
-      state.selectedSectionId = next.id;
-      items.unshift(next);
-    }
-    writeSavedSections(items.slice(0, 60));
-    return next;
-  }
-
-  function duplicateCurrentSection() {
-    var items = readSavedSections();
-    var source = state.selectedSectionId
-      ? items.find(function (item) { return item.id === state.selectedSectionId; })
-      : null;
-    var next = Object.assign({}, source || currentSource("Jigma Section"), {
-      id: "section-" + Date.now().toString(36),
-      name: ((source && source.name) || "Jigma Section") + " Copy",
-      updatedAt: new Date().toISOString(),
-    });
-    items.unshift(next);
-    writeSavedSections(items.slice(0, 60));
-    state.selectedSectionId = next.id;
-    return next;
-  }
-
-  function loadSection(section) {
-    state.html = section.html || "";
-    state.css = section.css || "";
-    state.js = section.javascript || "";
-    state.selectedSectionId = section.id || "";
-    state.lastRun = null;
-    persistWorkspace();
-    syncEditors();
-    updateStatus("Section loaded.");
   }
 
   function selectedIdFromGlobals() {
@@ -718,25 +656,6 @@
     return text.replace(/></g, ">\n<");
   }
 
-  function splitCombinedSource(source) {
-    var text = String(source || "");
-    var css = [];
-    var js = [];
-    var html = text
-      .replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, function (_, body) {
-        css.push(body.trim());
-        return "";
-      })
-      .replace(/<script\b[^>]*>([\s\S]*?)<\/script>/gi, function (_, body) {
-        js.push(body.trim());
-        return "";
-      })
-      .replace(/<!doctype[^>]*>/gi, "")
-      .replace(/<\/?(html|head|body)\b[^>]*>/gi, "")
-      .trim();
-    return { html: html, css: css.join("\n\n"), js: js.join("\n\n") };
-  }
-
   function getVisibleEditorKinds() {
     return ["html", "css", "js"].filter(function (kind) {
       return ui.visibleEditors[kind] !== false;
@@ -920,13 +839,7 @@
     if (!state.drawerOpen) return;
 
     var review = el("section", "jigma-review");
-    review.appendChild(el("h3", "", state.drawerMode === "saved" ? "Saved Sections" : "Review"));
-
-    if (state.drawerMode === "saved") {
-      renderSavedSections(review);
-      nodes.drawer.appendChild(review);
-      return;
-    }
+    review.appendChild(el("h3", "", "Review"));
 
     if (!state.lastRun) {
       review.appendChild(el("p", "", "Run Jigma to generate a Bricks Compatibility payload."));
@@ -1001,76 +914,6 @@
     });
   }
 
-  function renderSavedSections(parent) {
-    var tools = el("div", "jigma-saved-tools");
-    var save = el("button", "jigma-button", "Save current");
-    var importJson = el("button", "jigma-button", "Import JSON");
-    save.type = importJson.type = "button";
-    save.addEventListener("click", function () {
-      saveCurrentSection();
-      renderReviewDrawer();
-      updateStatus("Section saved.", "ready");
-    });
-    importJson.addEventListener("click", importSectionJson);
-    tools.append(save, importJson);
-    parent.appendChild(tools);
-
-    readSavedSections().forEach(function (section) {
-      var row = el("article", "jigma-saved-row");
-      row.appendChild(el("strong", "", section.name || "Jigma Section"));
-      row.appendChild(el("span", "", section.updatedAt ? new Date(section.updatedAt).toLocaleString() : ""));
-      var load = el("button", "jigma-button", "Load");
-      var menu = el("button", "jigma-button", "\u2026");
-      load.type = menu.type = "button";
-      load.addEventListener("click", function () { loadSection(section); });
-      menu.addEventListener("click", function () { savedSectionMenu(section); });
-      row.append(load, menu);
-      parent.appendChild(row);
-    });
-  }
-
-  function savedSectionMenu(section) {
-    var action = window.prompt("Rename, Duplicate Section, Export JSON, or Delete?", "Rename");
-    var items = readSavedSections();
-    var index = items.findIndex(function (item) { return item.id === section.id; });
-    if (index < 0 || !action) return;
-    if (/rename/i.test(action)) {
-      var nextName = window.prompt("Section name", items[index].name || "Jigma Section");
-      if (nextName) items[index].name = nextName;
-    } else if (/duplicate/i.test(action)) {
-      items.unshift(Object.assign({}, items[index], {
-        id: "section-" + Date.now().toString(36),
-        name: (items[index].name || "Jigma Section") + " Copy",
-        updatedAt: new Date().toISOString(),
-      }));
-    } else if (/export/i.test(action)) {
-      navigator.clipboard.writeText(JSON.stringify(items[index], null, 2));
-    } else if (/delete/i.test(action)) {
-      items.splice(index, 1);
-    }
-    writeSavedSections(items);
-    renderReviewDrawer();
-  }
-
-  function importSectionJson() {
-    var input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    input.addEventListener("change", function () {
-      var file = input.files && input.files[0];
-      if (!file) return;
-      file.text().then(function (text) {
-        var parsed = safeJsonParse(text, null);
-        if (!parsed) throw new Error("Invalid section JSON.");
-        loadSection(parsed);
-        updateStatus("Section imported.", "ready");
-      }).catch(function (error) {
-        updateStatus(error.message || "Import failed.", "blocked");
-      });
-    });
-    input.click();
-  }
-
   function doRun() {
     try {
       runConversion();
@@ -1133,27 +976,6 @@
 
   function openSettingsModal() {
     openModal("Jigma Settings", renderSettingsModal);
-  }
-
-  function openQuickImportModal() {
-    openModal("Quick Import", function (body) {
-      var text = el("textarea", "jigma-modal-textarea");
-      text.placeholder = "Paste combined HTML, CSS and JavaScript";
-      var apply = el("button", "jigma-button jigma-button--primary", "Import");
-      apply.type = "button";
-      apply.addEventListener("click", function () {
-        var split = splitCombinedSource(text.value);
-        state.html = split.html;
-        state.css = split.css;
-        state.js = split.js;
-        state.lastRun = null;
-        persistWorkspace();
-        syncEditors();
-        closeModal();
-        updateStatus("Source imported.", "ready");
-      });
-      body.append(text, apply);
-    });
   }
 
   function openModal(title, renderBody) {
@@ -1369,17 +1191,8 @@
 
   function toolsSection() {
     var section = settingsSection("Tools", []);
-    var quickImport = el("button", "jigma-button", "Quick Import");
-    var saved = el("button", "jigma-button", "Saved Sections");
     var reset = el("button", "jigma-button", "Reset Jigma UI");
-    quickImport.type = saved.type = reset.type = "button";
-    quickImport.addEventListener("click", openQuickImportModal);
-    saved.addEventListener("click", function () {
-      closeModal();
-      state.drawerOpen = true;
-      state.drawerMode = "saved";
-      renderReviewDrawer();
-    });
+    reset.type = "button";
     reset.addEventListener("click", function () {
       storageRemove(UI_KEY);
       storageRemove(WORKSPACE_KEY);
@@ -1391,7 +1204,7 @@
       renderSettingsModalRefresh();
     });
     section.append(toggleRow("Show diagnostics", "Show safe local mount and update diagnostics in this settings view.", "showDiagnostics"));
-    section.append(quickImport, saved, reset);
+    section.append(reset);
     return section;
   }
 
@@ -1475,7 +1288,6 @@
     var run = el("button", "jigma-button jigma-button--preview jigma-action-primary", "Preview");
     var insert = el("button", "jigma-button jigma-button--primary jigma-action-primary", config.insertLabel || "Insert into Selected");
     var copy = el("button", "jigma-button jigma-action-secondary", config.copyLabel || "Copy Structure");
-    var save = el("button", "jigma-button jigma-action-secondary", "Save Section");
     var settings = el("button", "jigma-icon-button jigma-action-tertiary", "Settings");
     var collapse = el("button", "jigma-icon-button jigma-action-tertiary jigma-expand-toggle", "Collapse");
     var tabs = el("div", "jigma-tabs");
@@ -1484,11 +1296,10 @@
     var drawer = el("aside", "jigma-drawer");
     var resize = el("button", "jigma-dock-resize", "");
 
-    status.type = run.type = insert.type = copy.type = save.type = settings.type = collapse.type = resize.type = "button";
+    status.type = run.type = insert.type = copy.type = settings.type = collapse.type = resize.type = "button";
     run.title = "Run - Shift + Enter";
     insert.title = "Insert into Selected - Cmd/Ctrl + Shift + Enter";
     copy.title = "Copy Structure - Cmd/Ctrl + Option/Alt + C";
-    save.title = "Save Section - Cmd/Ctrl + Option/Alt + S";
     settings.title = "Settings";
     collapse.title = "Collapse dock - Escape";
     resize.setAttribute("aria-label", "Resize Jigma dock");
@@ -1496,7 +1307,7 @@
     status.setAttribute("aria-label", "Open Jigma review");
 
     brand.append(mark, wordmark);
-    actions.append(run, insert, copy, save, status, settings, collapse);
+    actions.append(run, insert, copy, status, settings, collapse);
     toolbar.append(brand, target, actions);
 
     nodes = {
@@ -1508,7 +1319,6 @@
       run: run,
       insert: insert,
       copy: copy,
-      save: save,
       settings: settings,
       collapse: collapse,
       tabs: tabs,
@@ -1548,13 +1358,6 @@
     run.addEventListener("click", doRun);
     insert.addEventListener("click", doInsert);
     copy.addEventListener("click", doCopy);
-    save.addEventListener("click", function () {
-      saveCurrentSection();
-      state.drawerOpen = true;
-      state.drawerMode = "saved";
-      renderReviewDrawer();
-      updateStatus("Section saved.", "ready");
-    });
     status.addEventListener("click", function () {
       state.drawerOpen = !state.drawerOpen;
       state.drawerMode = "review";
@@ -1650,10 +1453,6 @@
     } else if (event.key.toLowerCase() === "c" && modifier && alt) {
       event.preventDefault();
       doCopy();
-    } else if (event.key.toLowerCase() === "s" && modifier && alt) {
-      event.preventDefault();
-      saveCurrentSection();
-      updateStatus("Section saved.", "ready");
     }
   }
 

@@ -3484,6 +3484,9 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       (child) => !HIDDEN_STRUCTURE_TAGS.has(child.tagName) && CLASS_OWNED_PHRASING_TAGS.has(child.tagName) && (getClassNames$1(child).length > 0 || hasClassedPhrasingChild(child))
     );
   }
+  function shouldPreserveEmptyPhrasingElement(element) {
+    return CLASS_OWNED_PHRASING_TAGS.has(element.tagName) && hasOnlyPhrasingContent(element) && !serializeInlineContent(element).trim();
+  }
   function getBricksMapping(element) {
     const tag = element.tagName;
     const text = getOwnText$1(element, 500);
@@ -3520,6 +3523,9 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     }
     if (tag === "svg") {
       return { name: "svg", supported: true };
+    }
+    if (shouldPreserveEmptyPhrasingElement(element)) {
+      return { name: "div", supported: true, semanticTag: tag };
     }
     if (TEXT_TAGS.has(tag) && hasOnlyPhrasingContent(element) && !hasClassedPhrasingChild(element) && text) {
       return { name: "text-basic", supported: true };
@@ -4213,46 +4219,68 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       }
       const directText = getOwnText$1(element, 500);
       const isTextElement = ["heading", "text-basic", "button", "text-link"].includes(mapping.name);
-      if (conversionProfile === "fidelity" && !isTextElement && directText) {
-        const textId = makeStableId(`${path}:direct-text:${directText}`);
-        const textClass = createGeneratedTextClass(bemFactory.blockName, assignment);
+      const shouldCreateDirectTextElements = !isTextElement && directText && (conversionProfile === "fidelity" || compatibilityProfile);
+      const addDirectTextElement = (text, sequence) => {
+        const normalizedText = text.replace(/\s+/g, " ").trim();
+        if (!normalizedText) {
+          return;
+        }
+        const textId = makeStableId(`${path}:direct-text:${sequence}:${normalizedText}`);
+        const textClass = conversionProfile === "fidelity" ? createGeneratedTextClass(bemFactory.blockName, assignment) : "";
+        const textClassList = textClass ? [textClass] : [];
         const textElement = applyBricksElementLabel({
           id: textId,
           name: "text-basic",
           parent: id,
           children: [],
           settings: {
-            text: directText,
-            ...shouldCreateNativeBemClasses ? {} : { _cssClasses: textClass }
+            text: normalizedText,
+            tag: "span",
+            ...!shouldCreateNativeBemClasses && textClass ? { _cssClasses: textClass } : {}
           }
-        }, createBricksElementLabel({
+        }, textClass ? createBricksElementLabel({
           bemClass: textClass,
           tagName: "span",
           parentLabel: bricksElement.label
-        }));
+        }) : `${bricksElement.label ?? "Element"} Text`);
         content.push(textElement);
         contentById.set(textId, textElement);
-        classListByElementId.set(textId, [textClass]);
-        generatedClassNames.push(textClass);
+        classListByElementId.set(textId, textClassList);
+        generatedClassNames.push(...textClassList);
         bricksElement.children.push(textId);
         generatedTextElementCount += 1;
-        classAttachmentCount += 1;
-      }
+        classAttachmentCount += textClassList.length;
+      };
       let visibleChildIndex = 0;
-      if (!NON_NESTABLE_BRICKS_ELEMENTS.has(mapping.name)) element.children.forEach((child) => {
-        if (element.tagName === "picture") {
-          return;
+      let directTextIndex = 0;
+      if (!NON_NESTABLE_BRICKS_ELEMENTS.has(mapping.name)) {
+        const walkChild = (child) => {
+          if (element.tagName === "picture" || HIDDEN_STRUCTURE_TAGS.has(child.tagName)) {
+            return;
+          }
+          const childPath = `${path}-${visibleChildIndex}`;
+          visibleChildIndex += 1;
+          const childId = walkElement(child, id, childPath, [...ancestors, element]);
+          if (childId) {
+            bricksElement.children.push(childId);
+          }
+        };
+        if (shouldCreateDirectTextElements && element.contentParts.length > 0) {
+          element.contentParts.forEach((part) => {
+            if (part.type === "text") {
+              addDirectTextElement(part.value, directTextIndex);
+              directTextIndex += 1;
+              return;
+            }
+            walkChild(part.element);
+          });
+        } else {
+          if (shouldCreateDirectTextElements) {
+            addDirectTextElement(directText, directTextIndex);
+          }
+          element.children.forEach(walkChild);
         }
-        if (HIDDEN_STRUCTURE_TAGS.has(child.tagName)) {
-          return;
-        }
-        const childPath = `${path}-${visibleChildIndex}`;
-        visibleChildIndex += 1;
-        const childId = walkElement(child, id, childPath, [...ancestors, element]);
-        if (childId) {
-          bricksElement.children.push(childId);
-        }
-      });
+      }
       return id;
     };
     parsed.roots.forEach((element, index) => walkElement(element, 0, `${index}`));
