@@ -2618,7 +2618,7 @@ ${css}` : css;
       if (declarations.length === 0) {
         return;
       }
-      if (block.selector === ":root" || /^@font-face\b/i.test(block.selector)) {
+      if (block.selector === ":root" || /^@(?:font-face|property|import|layer|page|charset)\b/i.test(block.selector)) {
         declarations.forEach((declaration) => {
           records.push({
             selector: block.selector,
@@ -3239,6 +3239,331 @@ ${cssValue}` : cssValue;
       fallbackStrategy: classFallbackStrategy === "literal-bem" && literalFallbackBuckets.size > 0 ? "literal-bem" : classFallbackStrategy === "bricks-class-root" && attachmentBuckets.size > 0 ? "bricks-class-root" : "none",
       fallbackRuleCountByClassName
     };
+  }
+  function buildTargetMaps(targets) {
+    const classMap = /* @__PURE__ */ new Map();
+    const idMap = /* @__PURE__ */ new Map();
+    targets.forEach((target) => {
+      unique([...target.sourceClasses, target.className]).forEach(
+        (className) => addClassMapEntry(classMap, className, target)
+      );
+      addClassMapEntry(idMap, target.sourceId, target);
+    });
+    return { classMap, idMap };
+  }
+  function pickRootTarget(targets) {
+    return targets.find((target) => !target.className.includes("__")) ?? targets[0];
+  }
+  function emptyElementCssResult(warnings) {
+    return {
+      warnings,
+      attachedRuleCount: 0,
+      unmappedRuleCount: 0,
+      pseudoSelectorCount: 0,
+      nativeStyleMappedCount: 0,
+      customCssFallbackCount: 0,
+      blockScopedFallbackCount: 0,
+      literalFallbackRuleCount: 0,
+      responsiveRuleCount: 0,
+      pseudoRuleCount: 0,
+      unresolvedSelectorCount: 0,
+      styledClassIds: /* @__PURE__ */ new Set(),
+      fallbackCss: "",
+      fallbackStrategy: "none",
+      fallbackRuleCountByClassName: /* @__PURE__ */ new Map()
+    };
+  }
+  function attachCssToRootClass(css, targets, options = {}) {
+    const warnings = [];
+    const result = emptyElementCssResult(warnings);
+    const rootTarget = targets.length > 0 ? pickRootTarget(targets) : null;
+    if (!css.trim() || !rootTarget) {
+      return result;
+    }
+    const { classMap, idMap } = buildTargetMaps(targets);
+    let attachedRuleCount = 0;
+    let responsiveRuleCount = 0;
+    let pseudoRuleCount = 0;
+    const rewriteBlocks = (inputCss) => {
+      const out = [];
+      parseTopLevelBlocks$1(inputCss).forEach((block) => {
+        if (/^@(?:media|container|supports)\b/i.test(block.selector)) {
+          const inner = rewriteBlocks(block.body);
+          if (inner.length === 0) {
+            return;
+          }
+          responsiveRuleCount += 1;
+          out.push(
+            options.minify ? `${block.selector}{${inner.join("")}}` : `${block.selector} {
+${indent(inner.join("\n\n"), 2)}
+}`
+          );
+          return;
+        }
+        if (/^@/.test(block.selector)) {
+          out.push(formatRawAtRule(block.selector, block.body));
+          attachedRuleCount += 1;
+          return;
+        }
+        const declarations = parseDeclarations(block.body);
+        if (declarations.length === 0) {
+          return;
+        }
+        const declText = declarations.map(formatDeclaration).join("\n");
+        const rewrittenSelector = block.selector.split(",").map((raw) => {
+          const selector = raw.trim();
+          if (!selector) {
+            return "";
+          }
+          if (/:{1,2}[a-z-]/i.test(selector)) {
+            pseudoRuleCount += 1;
+          }
+          return mapSelectorToLiteralBem(selector, classMap, idMap) ?? selector;
+        }).filter(Boolean).join(", ");
+        if (!rewrittenSelector) {
+          return;
+        }
+        attachedRuleCount += 1;
+        out.push(
+          options.minify ? `${rewrittenSelector}{${minifyDeclarations(declText)}}` : `${rewrittenSelector} {
+${indent(declText, 2)}
+}`
+        );
+      });
+      return out;
+    };
+    const snippets = rewriteBlocks(css);
+    if (snippets.length > 0) {
+      const existing = typeof rootTarget.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] === "string" ? `${rootTarget.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD]}`.trim() : "";
+      const cssValue = snippets.join("\n\n");
+      rootTarget.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] = existing ? `${existing}
+
+${cssValue}` : cssValue;
+      result.styledClassIds.add(rootTarget.globalClass.id);
+    }
+    result.attachedRuleCount = attachedRuleCount;
+    result.customCssFallbackCount = attachedRuleCount;
+    result.literalFallbackRuleCount = attachedRuleCount;
+    result.responsiveRuleCount = responsiveRuleCount;
+    result.pseudoRuleCount = pseudoRuleCount;
+    result.fallbackStrategy = "literal-bem";
+    return result;
+  }
+  function splitClassFirstCss(css, targets) {
+    if (!css.trim() || targets.length === 0) {
+      return { classCss: "", rootCss: css.trim() };
+    }
+    const { classMap } = buildTargetMaps(targets);
+    const classBlocks = [];
+    const rootBlocks = [];
+    const isSimpleMappedClass = (selector) => {
+      const trimmed = selector.trim();
+      if (!/^\.[-_a-zA-Z][-_a-zA-Z0-9-]*$/.test(trimmed)) {
+        return false;
+      }
+      return Boolean(getPreferredClassTarget(trimmed.slice(1), classMap));
+    };
+    const blockIsClassFirst = (block) => {
+      if (/^@/.test(block.selector)) {
+        return false;
+      }
+      return block.selector.split(",").map((selector) => selector.trim()).filter(Boolean).every(isSimpleMappedClass);
+    };
+    parseTopLevelBlocks$1(css).forEach((block) => {
+      const text = `${block.selector} {
+${block.body}
+}`;
+      if (blockIsClassFirst(block)) {
+        classBlocks.push(text);
+      } else {
+        rootBlocks.push(text);
+      }
+    });
+    return {
+      classCss: classBlocks.join("\n\n"),
+      rootCss: rootBlocks.join("\n\n")
+    };
+  }
+  function rewriteComponentCss(inputCss, classMap, idMap, minify = false) {
+    const out = [];
+    parseTopLevelBlocks$1(inputCss).forEach((block) => {
+      if (/^@(?:media|container|supports)\b/i.test(block.selector)) {
+        const inner = rewriteComponentCss(block.body, classMap, idMap, minify);
+        if (!inner.trim()) {
+          return;
+        }
+        out.push(minify ? `${block.selector}{${inner}}` : `${block.selector} {
+${indent(inner, 2)}
+}`);
+        return;
+      }
+      if (/^@/.test(block.selector)) {
+        out.push(formatRawAtRule(block.selector, block.body));
+        return;
+      }
+      const declarations = parseDeclarations(block.body);
+      if (declarations.length === 0) {
+        return;
+      }
+      const declText = declarations.map(formatDeclaration).join("\n");
+      const rewrittenSelector = block.selector.split(",").map((raw) => {
+        const selector = raw.trim();
+        if (!selector) {
+          return "";
+        }
+        return mapSelectorToLiteralBem(selector, classMap, idMap) ?? selector;
+      }).filter(Boolean).join(", ");
+      if (!rewrittenSelector) {
+        return;
+      }
+      out.push(
+        minify ? `${rewrittenSelector}{${minifyDeclarations(declText)}}` : `${rewrittenSelector} {
+${indent(declText, 2)}
+}`
+      );
+    });
+    return out.join("\n\n");
+  }
+  function componentCssToGeneratedSelectors(css, targets, minify = false) {
+    if (!css.trim() || targets.length === 0) {
+      return css.trim();
+    }
+    const { classMap, idMap } = buildTargetMaps(targets);
+    return rewriteComponentCss(css, classMap, idMap, minify);
+  }
+  const CSS_PLACEMENT_MODES = [
+    "auto-class-first",
+    "attach-to-classes",
+    "scope-to-section",
+    "page-stylesheet"
+  ];
+  const DEFAULT_CSS_PLACEMENT = "auto-class-first";
+  const CSS_PLACEMENT_LABELS = {
+    "auto-class-first": "Auto — class-first",
+    "attach-to-classes": "Attach to classes",
+    "scope-to-section": "Scope to section",
+    "page-stylesheet": "Page stylesheet"
+  };
+  function normalizeCssPlacement(value, fallback = DEFAULT_CSS_PLACEMENT) {
+    return CSS_PLACEMENT_MODES.includes(value) ? value : fallback;
+  }
+  const PAGE_LEVEL_LABELS = {
+    root: ":root variables",
+    document: "document styles",
+    "font-face": "@font-face",
+    property: "@property",
+    keyframes: "shared @keyframes",
+    layer: "unscoped @layer",
+    import: "@import",
+    reset: "global reset",
+    global: "global selector"
+  };
+  function readTopLevelBlocks(css) {
+    const blocks = [];
+    let index = 0;
+    while (index < css.length) {
+      while (index < css.length && /\s/.test(css[index])) index += 1;
+      if (index >= css.length) break;
+      const start = index;
+      let quote = "";
+      let depth = 0;
+      while (index < css.length) {
+        const char = css[index];
+        const previous = css[index - 1];
+        if (quote) {
+          if (char === quote && previous !== "\\") quote = "";
+          index += 1;
+          continue;
+        }
+        if (char === '"' || char === "'") {
+          quote = char;
+          index += 1;
+          continue;
+        }
+        if (char === "{") {
+          depth += 1;
+        } else if (char === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            index += 1;
+            blocks.push(css.slice(start, index).trim());
+            break;
+          }
+        } else if (char === ";" && depth === 0) {
+          index += 1;
+          blocks.push(css.slice(start, index).trim());
+          break;
+        }
+        index += 1;
+      }
+      if (index >= css.length && start < css.length) {
+        const rest = css.slice(start).trim();
+        if (rest) blocks.push(rest);
+      }
+    }
+    return blocks.filter(Boolean);
+  }
+  function selectorList(header) {
+    return header.split(",").map((selector) => selector.trim().toLowerCase()).filter(Boolean);
+  }
+  function classifyPageLevelCss(block) {
+    const header = block.split("{")[0].trim();
+    const lower = header.toLowerCase();
+    if (lower.startsWith("@import")) return "import";
+    if (lower.startsWith("@font-face")) return "font-face";
+    if (lower.startsWith("@property")) return "property";
+    if (lower.startsWith("@keyframes") || lower.startsWith("@-webkit-keyframes")) return "keyframes";
+    if (lower.startsWith("@layer") && !lower.includes(".")) return "layer";
+    if (lower.startsWith("@")) return null;
+    const selectors = selectorList(header);
+    if (selectors.length === 0) return null;
+    if (selectors.every((selector) => selector === ":root")) return "root";
+    if (selectors.every((selector) => selector === "html" || selector === "body" || selector === "html body")) {
+      return "document";
+    }
+    if (selectors.some((selector) => selector === "*" || selector.startsWith("*::") || selector.startsWith("*,"))) {
+      return "reset";
+    }
+    if (selectors.some((selector) => selector.startsWith("html ") || selector.startsWith("body "))) {
+      return "global";
+    }
+    return null;
+  }
+  function partitionPageLevelCss(css) {
+    const seenPageLevel = /* @__PURE__ */ new Set();
+    const pageBlocks = [];
+    const componentBlocks = [];
+    const groups = /* @__PURE__ */ new Map();
+    readTopLevelBlocks(css).forEach((block) => {
+      const type = classifyPageLevelCss(block);
+      if (!type) {
+        componentBlocks.push(block);
+        return;
+      }
+      const normalized = block.replace(/\s+/g, " ").trim();
+      if (seenPageLevel.has(normalized)) {
+        return;
+      }
+      seenPageLevel.add(normalized);
+      pageBlocks.push(block);
+      groups.set(type, (groups.get(type) || 0) + 1);
+    });
+    return {
+      pageLevelCss: pageBlocks.join("\n\n"),
+      componentCss: componentBlocks.join("\n\n"),
+      review: {
+        css: pageBlocks.join("\n\n"),
+        ruleCount: pageBlocks.length,
+        groups: Array.from(groups.entries()).map(([type, count]) => ({
+          type,
+          label: PAGE_LEVEL_LABELS[type],
+          count
+        }))
+      }
+    };
+  }
+  function detectPageLevelCss(css) {
+    return partitionPageLevelCss(css).review;
   }
   function pushWarning$1(warnings, message, severity = "warning") {
     if (!warnings.some((warning) => warning.message === message)) {
@@ -4405,11 +4730,89 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     });
     return targets;
   }
+  function mergeCssResults(a, b) {
+    const styledClassIds = /* @__PURE__ */ new Set([...a.styledClassIds, ...b.styledClassIds]);
+    const fallbackRuleCountByClassName = new Map(a.fallbackRuleCountByClassName ?? []);
+    (b.fallbackRuleCountByClassName ?? /* @__PURE__ */ new Map()).forEach((count, name) => {
+      fallbackRuleCountByClassName.set(name, (fallbackRuleCountByClassName.get(name) ?? 0) + count);
+    });
+    return {
+      warnings: [...a.warnings, ...b.warnings],
+      attachedRuleCount: a.attachedRuleCount + b.attachedRuleCount,
+      unmappedRuleCount: a.unmappedRuleCount + b.unmappedRuleCount,
+      pseudoSelectorCount: a.pseudoSelectorCount + b.pseudoSelectorCount,
+      nativeStyleMappedCount: a.nativeStyleMappedCount + b.nativeStyleMappedCount,
+      customCssFallbackCount: a.customCssFallbackCount + b.customCssFallbackCount,
+      blockScopedFallbackCount: a.blockScopedFallbackCount + b.blockScopedFallbackCount,
+      literalFallbackRuleCount: a.literalFallbackRuleCount + b.literalFallbackRuleCount,
+      responsiveRuleCount: a.responsiveRuleCount + b.responsiveRuleCount,
+      pseudoRuleCount: a.pseudoRuleCount + b.pseudoRuleCount,
+      unresolvedSelectorCount: a.unresolvedSelectorCount + b.unresolvedSelectorCount,
+      styledClassIds,
+      fallbackCss: "",
+      fallbackStrategy: a.fallbackStrategy === "literal-bem" || b.fallbackStrategy === "literal-bem" ? "literal-bem" : a.fallbackStrategy ?? b.fallbackStrategy ?? "none",
+      fallbackRuleCountByClassName
+    };
+  }
+  function expandCommaSelectors(css) {
+    const out = [];
+    let index = 0;
+    while (index < css.length) {
+      const open = css.indexOf("{", index);
+      if (open === -1) {
+        break;
+      }
+      let depth = 0;
+      let close = -1;
+      for (let cursor = open; cursor < css.length; cursor += 1) {
+        if (css[cursor] === "{") {
+          depth += 1;
+        } else if (css[cursor] === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            close = cursor;
+            break;
+          }
+        }
+      }
+      if (close === -1) {
+        break;
+      }
+      const selector = css.slice(index, open).trim();
+      const body = css.slice(open + 1, close);
+      if (/^@(?:media|container|supports|layer)\b/i.test(selector)) {
+        out.push(`${selector} {
+${expandCommaSelectors(body)}
+}`);
+      } else if (/^@/.test(selector)) {
+        out.push(`${selector} {${body}}`);
+      } else {
+        selector.split(",").map((part) => part.trim()).filter(Boolean).forEach((part) => out.push(`${part} {${body}}`));
+      }
+      index = close + 1;
+    }
+    return out.join("\n");
+  }
+  function routeComponentCss(mode, componentCss, targets, options) {
+    if (mode === "scope-to-section") {
+      return attachCssToRootClass(componentCss, targets, options);
+    }
+    if (mode === "auto-class-first") {
+      const { classCss, rootCss } = splitClassFirstCss(componentCss, targets);
+      const distributed = attachCssToGlobalClasses(classCss, targets, options);
+      if (!rootCss.trim()) {
+        return distributed;
+      }
+      return mergeCssResults(distributed, attachCssToRootClass(rootCss, targets, options));
+    }
+    return attachCssToGlobalClasses(componentCss, targets, options);
+  }
   function createBricksExport(input) {
     const warnings = [];
     const conversionProfile = input.options.conversionProfile ?? "clean-native";
     const exportProfile = input.options.exportProfile ?? "native-controls-experimental";
     const compatibilityProfile = exportProfile === "bricks-compatibility";
+    const cssPlacement = input.options.cssPlacement ?? "attach-to-classes";
     const exportMode = input.options.exportMode;
     const shouldCreateNativeBemClasses = compatibilityProfile || isNativeBemClassMode(exportMode);
     const shouldAttachElementCss = !compatibilityProfile && exportMode === "element-styles";
@@ -4681,11 +5084,16 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         }
       });
     }
-    const classCss = input.css.trim() && shouldCreateNativeBemClasses ? attachCssToGlobalClasses(
-      input.css,
-      createClassCssTargets(pendingElements, globalClassIdMap, globalClassById),
-      { minify: input.options.minifyElementCss, literalOnly: compatibilityProfile }
-    ) : {
+    const partition = partitionPageLevelCss(input.css);
+    const usePagePartition = input.options.cssPlacement !== void 0;
+    const pageStylesheetMode = cssPlacement === "page-stylesheet";
+    const componentCss = !usePagePartition ? input.css : pageStylesheetMode ? "" : partition.componentCss;
+    const cssTargets = shouldCreateNativeBemClasses ? createClassCssTargets(pendingElements, globalClassIdMap, globalClassById) : [];
+    const pageLevelCss = !usePagePartition ? "" : pageStylesheetMode ? [
+      partition.pageLevelCss,
+      componentCssToGeneratedSelectors(partition.componentCss, cssTargets, input.options.minifyElementCss)
+    ].filter((part) => part && part.trim().length > 0).join("\n\n") : partition.pageLevelCss;
+    const emptyClassCssResult = {
       warnings: [],
       attachedRuleCount: 0,
       unmappedRuleCount: 0,
@@ -4700,6 +5108,12 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       fallbackStrategy: "none",
       fallbackRuleCountByClassName: /* @__PURE__ */ new Map()
     };
+    const classCss = componentCss.trim() && shouldCreateNativeBemClasses ? routeComponentCss(
+      cssPlacement,
+      componentCss,
+      cssTargets,
+      { minify: input.options.minifyElementCss, literalOnly: compatibilityProfile }
+    ) : emptyClassCssResult;
     classCss.warnings.filter(isActionableCssWarning).forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
     if (input.css.trim() && shouldCreateNativeBemClasses && classCss.attachedRuleCount === 0) {
       pushWarning(
@@ -4745,7 +5159,12 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         "error"
       );
     }
-    const cssConservationAudit = input.css.trim() && shouldCreateNativeBemClasses ? auditCssDeclarationConservation(input.css, classCustomCss) : {
+    const conservationOutputCss = [
+      classCustomCss,
+      usePagePartition && partition.pageLevelCss.trim() ? expandCommaSelectors(partition.pageLevelCss) : "",
+      usePagePartition && cssPlacement !== "attach-to-classes" && partition.componentCss.trim() ? expandCommaSelectors(partition.componentCss) : ""
+    ].filter((part) => part && part.trim().length > 0).join("\n\n");
+    const cssConservationAudit = input.css.trim() && shouldCreateNativeBemClasses ? auditCssDeclarationConservation(input.css, conservationOutputCss) : {
       sourceDeclarationCount: 0,
       preservedDeclarationCount: 0,
       pageLevelDeclarationCount: 0,
@@ -4934,6 +5353,7 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
       sourceUrl: "jigma.local",
       version: TARGET_BRICKS_VERSION,
       ...shouldCreateGlobalClasses ? { globalClasses } : {},
+      ...pageLevelCss.trim() ? { pageStylesCss: pageLevelCss } : {},
       jigmaMeta: {
         label: "Jigma strict BEM Bricks structure",
         targetBricksVersion: TARGET_BRICKS_VERSION,
@@ -5073,7 +5493,7 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     }
     return messages;
   }
-  const pluginCompatibilityOptions = (input) => ({
+  const pluginCompatibilityOptions = (input, cssPlacement) => ({
     stylingMode: "bem-css",
     exportMode: "native-bem-classes",
     exportProfile: "bricks-compatibility",
@@ -5084,121 +5504,19 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
     includeExternalCss: false,
     includeExternalScripts: false,
     minifyElementCss: false,
-    includeJavaScriptCode: Boolean(input.includeJavaScriptCode)
+    includeJavaScriptCode: Boolean(input.includeJavaScriptCode),
+    cssPlacement
   });
-  function readTopLevelCssBlocks(css) {
-    const blocks = [];
-    let index = 0;
-    while (index < css.length) {
-      while (index < css.length && /\s/.test(css[index])) index += 1;
-      if (index >= css.length) break;
-      const start = index;
-      let quote = "";
-      let depth = 0;
-      while (index < css.length) {
-        const char = css[index];
-        const previous = css[index - 1];
-        if (quote) {
-          if (char === quote && previous !== "\\") quote = "";
-          index += 1;
-          continue;
-        }
-        if (char === '"' || char === "'") {
-          quote = char;
-          index += 1;
-          continue;
-        }
-        if (char === "{") {
-          depth += 1;
-        } else if (char === "}") {
-          depth -= 1;
-          if (depth === 0) {
-            index += 1;
-            blocks.push(css.slice(start, index).trim());
-            break;
-          }
-        } else if (char === ";" && depth === 0) {
-          index += 1;
-          blocks.push(css.slice(start, index).trim());
-          break;
-        }
-        index += 1;
-      }
-      if (index >= css.length && start < css.length) {
-        const rest = css.slice(start).trim();
-        if (rest) blocks.push(rest);
-      }
-    }
-    return blocks.filter(Boolean);
-  }
-  function selectorList(header) {
-    return header.split(",").map((selector) => selector.trim().toLowerCase()).filter(Boolean);
-  }
-  function classifyPageLevelCss(block) {
-    const header = block.split("{")[0].trim();
-    const lower = header.toLowerCase();
-    if (lower.startsWith("@import")) return "import";
-    if (lower.startsWith("@font-face")) return "font-face";
-    if (lower.startsWith("@property")) return "property";
-    if (lower.startsWith("@keyframes") || lower.startsWith("@-webkit-keyframes")) return "keyframes";
-    if (lower.startsWith("@layer") && !lower.includes(".")) return "layer";
-    const selectors = selectorList(header);
-    if (selectors.length === 0) return null;
-    if (selectors.every((selector) => selector === ":root")) return "root";
-    if (selectors.every((selector) => selector === "html" || selector === "body" || selector === "html body")) {
-      return "document";
-    }
-    if (selectors.some((selector) => selector === "*" || selector.startsWith("*::") || selector.includes("*, *"))) {
-      return "reset";
-    }
-    if (selectors.some((selector) => selector.startsWith("html ") || selector.startsWith("body "))) {
-      return "global";
-    }
-    return null;
-  }
-  const pageLevelLabels = {
-    root: ":root variables",
-    document: "document styles",
-    "font-face": "@font-face",
-    property: "@property",
-    keyframes: "shared @keyframes",
-    layer: "unscoped @layer",
-    import: "@import",
-    reset: "global reset",
-    global: "global selector"
-  };
-  function detectPageLevelCss(css) {
-    const seen = /* @__PURE__ */ new Set();
-    const blocks = [];
-    const groups = /* @__PURE__ */ new Map();
-    readTopLevelCssBlocks(css).forEach((block) => {
-      const type = classifyPageLevelCss(block);
-      const normalized = block.replace(/\s+/g, " ").trim();
-      if (!type || seen.has(normalized)) {
-        return;
-      }
-      seen.add(normalized);
-      blocks.push(block);
-      groups.set(type, (groups.get(type) || 0) + 1);
-    });
-    return {
-      css: blocks.join("\n\n"),
-      ruleCount: blocks.length,
-      groups: Array.from(groups.entries()).map(([type, count]) => ({
-        type,
-        label: pageLevelLabels[type],
-        count
-      }))
-    };
-  }
   function convertToBricksCompatibility(input) {
+    const cssPlacement = normalizeCssPlacement(input.cssPlacement, DEFAULT_CSS_PLACEMENT);
     const exportResult = createBricksExport({
       html: input.html,
       css: input.css,
       js: input.js,
-      options: pluginCompatibilityOptions(input)
+      options: pluginCompatibilityOptions(input, cssPlacement)
     });
     const blockingErrors = getBricksExportBlockingMessages(exportResult);
+    const partition = partitionPageLevelCss(input.css);
     return {
       schemaVersion: BRICKS_COMPATIBILITY_SCHEMA_VERSION,
       targetBricksVersion: TARGET_BRICKS_VERSION,
@@ -5217,7 +5535,11 @@ ${inner.split("\n").map((line) => `  ${line}`).join("\n")}
         missingHrefCount: exportResult.validation.missingHrefCount ?? 0,
         missingImageCount: exportResult.validation.missingImageCount ?? 0
       },
-      pageLevelCss: detectPageLevelCss(input.css)
+      cssPlacement,
+      cssPlacementLabel: CSS_PLACEMENT_LABELS[cssPlacement],
+      // Reflects what was actually routed to the Page Styles element for this mode.
+      pageStylesCss: exportResult.pageStylesCss ?? "",
+      pageLevelCss: partition.review
     };
   }
   window.JigmaCore = {

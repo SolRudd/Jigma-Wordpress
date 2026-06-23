@@ -1,5 +1,24 @@
 # Changelog
 
+## CSS placement modes - 2026-06-23
+
+- Added four CSS placement modes to the shared converter (`lib/css/placement.ts`):
+  Auto — class-first (default), Attach to classes, Scope to section, and Page stylesheet.
+- Default is **Auto — class-first**: clear single-class rules attach to Bricks global
+  class CSS; descendant/pseudo/media rules that cannot split safely stay on the
+  root/component class; only true globals go to Jigma Page Styles. This preserves Jigma's
+  core class-owned CSS advantage rather than scoping everything to the root.
+- Page/global CSS (`:root`, `html`, `body`, `@font-face`, `@keyframes`, `@property`,
+  resets, and global utility selectors) is routed automatically to one reusable Jigma
+  Page Styles element instead of being dropped or re-pasted by hand.
+- Exposed a "CSS placement" setting in the Bricks plugin dock and the standalone web app;
+  both front-ends use the same shared routing and default to Auto — class-first.
+- Plugin Insert and web Copy Bricks Structure both apply the routed page styles
+  automatically, so users no longer need to paste page-level CSS manually.
+- Added acceptance tests for class-first routing, descendant/pseudo/media → root,
+  true-globals-only → Page Styles, Attach to classes / Scope to section / Page stylesheet
+  behaviour, and CSS declaration conservation across all modes.
+
 ## Jigma hosted plugin updates - 2026-06-22
 
 - Bumped the WordPress plugin beta to `0.2.3-beta`.

@@ -17,7 +17,9 @@ import {
 import {
   convertToBricksCompatibility,
   detectPageLevelCss,
+  DEFAULT_CSS_PLACEMENT,
 } from "../lib/plugin/jigma-core.ts";
+import { serializeBricksClipboardPayloadWithPageStyles } from "../lib/bricks/export.ts";
 import { createAssetManifest } from "../lib/assets/manifest.ts";
 import { BRICKS_ELEMENT_CUSTOM_CSS_FIELD } from "../lib/css/element.ts";
 import { inspectDependencies } from "../lib/dependencies/inspect.ts";
@@ -3154,6 +3156,16 @@ describe("Bricks export", () => {
     expect(panelJs).toContain("The selected element cannot contain children.");
     expect(panelJs).toContain("targetId");
     expect(panelJs).toContain("pageStylesCss");
+    // Plugin Insert uses the selected CSS placement mode and the converter's routed page CSS.
+    expect(panelJs).toContain("cssPlacement: ui.cssPlacement");
+    expect(panelJs).toContain("CSS placement");
+    expect(panelJs).toContain("Auto — class-first");
+    expect(panelJs).toContain("auto-class-first");
+    expect(panelJs).toContain("attach-to-classes");
+    expect(panelJs).toContain("scope-to-section");
+    expect(panelJs).toContain("page-stylesheet");
+    expect(panelJs).toContain("cssPlacement: \"auto-class-first\"");
+    expect(panelJs).toContain("state.lastRun.pageStylesCss");
     expect(panelJs).toContain("contentHash");
     expect(panelJs).toContain("contentHash: config.contentHash");
     expect(panelJs).toContain("setComponentRegistry");
@@ -3455,7 +3467,11 @@ describe("Bricks export", () => {
   });
 
   it("uses the shared Jigma Core wrapper for plugin payloads", () => {
-    const standalone = serializeBricksClipboardPayload(exportFor(featureCtaHtml, featureCtaCss, "", compatibilityOptions));
+    // The wrapper defaults to the auto-class-first placement mode, so the standalone
+    // export must request the same mode to produce an identical payload.
+    const standalone = serializeBricksClipboardPayload(
+      exportFor(featureCtaHtml, featureCtaCss, "", { ...compatibilityOptions, cssPlacement: "auto-class-first" }),
+    );
     const plugin = convertToBricksCompatibility({
       html: featureCtaHtml,
       css: featureCtaCss,
@@ -3699,5 +3715,187 @@ body { margin: 0; }
 
     expect(result.validation.hierarchyValid).toBe(true);
     expect(result.warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe("CSS placement modes", () => {
+  const placementHtml = `<section class="promo">
+    <h2 class="promo__title">Hello</h2>
+    <a class="promo__link" href="/go">Go</a>
+  </section>`;
+
+  const placementCss = `
+:root { --brand: #7957ff; }
+html { scroll-behavior: smooth; }
+body { margin: 0; }
+*, *::before { box-sizing: border-box; }
+@font-face { font-family: "Promo"; src: url("/promo.woff2") format("woff2"); }
+@keyframes promoPulse { to { opacity: 1; } }
+@property --promo-x { syntax: "<color>"; inherits: false; initial-value: red; }
+.promo { padding: 40px; background: var(--brand); }
+.promo__title { font-size: 32px; }
+.promo__title::before { content: "★"; }
+.promo__link:hover { color: red; }
+@media (max-width: 600px) { .promo { padding: 20px; } }
+`;
+
+  const classCustomCss = (
+    payload: ReturnType<typeof serializeBricksClipboardPayload>,
+  ) =>
+    payload.globalClasses
+      .map((entry) => `${entry.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`)
+      .join("\n\n");
+
+  const rootClassCss = (
+    payload: ReturnType<typeof serializeBricksClipboardPayload>,
+  ) => {
+    const root = payload.globalClasses.find((entry) => !entry.name.includes("__"));
+    return `${root?.settings?.[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`;
+  };
+
+  const titleClassCss = (
+    payload: ReturnType<typeof serializeBricksClipboardPayload>,
+  ) => {
+    const title = payload.globalClasses.find((entry) => entry.name.includes("__title"));
+    return `${title?.settings?.[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] ?? ""}`;
+  };
+
+  it("defaults to auto-class-first placement for both front-ends", () => {
+    expect(DEFAULT_CSS_PLACEMENT).toBe("auto-class-first");
+    const result = convertToBricksCompatibility({ html: placementHtml, css: placementCss, js: "" });
+    expect(result.cssPlacement).toBe("auto-class-first");
+    expect(result.cssPlacementLabel).toBe("Auto — class-first");
+  });
+
+  it("auto mode sends clear single-class rules to globalClasses[*].settings._cssCustom", () => {
+    const result = convertToBricksCompatibility({ html: placementHtml, css: placementCss, js: "" });
+    // .promo and .promo__title are clear single-class selectors -> class CSS.
+    expect(rootClassCss(result.payload)).toContain("padding: 40px");
+    expect(titleClassCss(result.payload)).toContain("font-size: 32px");
+  });
+
+  it("auto mode sends unsafe descendant/pseudo/media rules to the root/component class", () => {
+    const result = convertToBricksCompatibility({ html: placementHtml, css: placementCss, js: "" });
+    const rootCss = rootClassCss(result.payload);
+    // Pseudo-element, pseudo-class and media query stay on the root class (cannot split safely).
+    expect(rootCss).toContain("::before");
+    expect(rootCss).toContain(":hover");
+    expect(rootCss).toContain("@media");
+    // The simple title rule is NOT piled onto the root class, and the unsafe pseudo rule is
+    // not forced onto the title class.
+    expect(titleClassCss(result.payload)).not.toContain("::before");
+  });
+
+  it("auto mode sends only true globals to Jigma Page Styles", () => {
+    const result = convertToBricksCompatibility({ html: placementHtml, css: placementCss, js: "" });
+    expect(result.pageStylesCss).toContain(":root");
+    expect(result.pageStylesCss).toContain("@font-face");
+    expect(result.pageStylesCss).toContain("@keyframes promoPulse");
+    expect(result.pageStylesCss).toContain("@property --promo-x");
+    expect(result.pageStylesCss).toMatch(/(^|\n)\s*html\b/);
+    expect(result.pageStylesCss).toMatch(/(^|\n)\s*body\b/);
+    expect(result.pageStylesCss).toContain("box-sizing");
+    // Component CSS does not leak into page styles.
+    expect(result.pageStylesCss).not.toContain("padding: 40px");
+    // Page/global CSS does not leak into class CSS.
+    const classes = classCustomCss(result.payload);
+    expect(classes).not.toContain("@font-face");
+    expect(classes).not.toMatch(/:root\s*\{/);
+  });
+
+  it("attach-to-classes mode preserves the existing class-owned behaviour", () => {
+    const result = convertToBricksCompatibility({
+      html: placementHtml,
+      css: placementCss,
+      js: "",
+      cssPlacement: "attach-to-classes",
+    });
+    expect(result.cssPlacement).toBe("attach-to-classes");
+    // The title's CSS is owned by the title class.
+    expect(titleClassCss(result.payload)).toContain("32px");
+    // True globals are still routed out automatically.
+    expect(result.pageStylesCss).toContain("@font-face");
+  });
+
+  it("scope-to-section mode preserves full component CSS on the root/component class", () => {
+    const result = convertToBricksCompatibility({
+      html: placementHtml,
+      css: placementCss,
+      js: "",
+      cssPlacement: "scope-to-section",
+    });
+    const rootCss = rootClassCss(result.payload);
+    expect(rootCss).toContain("padding: 40px");
+    expect(rootCss).toContain("font-size: 32px");
+    expect(rootCss).toContain("::before");
+    expect(rootCss).toContain(":hover");
+    expect(rootCss).toContain("@media");
+  });
+
+  it("page-stylesheet mode routes all CSS to Jigma Page Styles", () => {
+    const result = convertToBricksCompatibility({
+      html: placementHtml,
+      css: placementCss,
+      js: "",
+      cssPlacement: "page-stylesheet",
+    });
+    // Component and global CSS both land in the page styles element.
+    expect(result.pageStylesCss).toContain("padding: 40px");
+    expect(result.pageStylesCss).toContain("font-size: 32px");
+    expect(result.pageStylesCss).toContain(":root");
+    expect(result.pageStylesCss).toContain("@font-face");
+    // No class-owned CSS is produced in this mode.
+    expect(classCustomCss(result.payload)).not.toContain("padding: 40px");
+  });
+
+  it("preserves :root, @font-face and @keyframes (no page CSS is dropped)", () => {
+    const result = convertToBricksCompatibility({ html: placementHtml, css: placementCss, js: "" });
+    expect(result.pageStylesCss).toContain("--brand: #7957ff");
+    expect(result.pageStylesCss).toContain("/promo.woff2");
+    expect(result.pageStylesCss).toContain("opacity: 1");
+  });
+
+  it("does not let any CSS declaration silently disappear in any mode", () => {
+    (["auto-class-first", "attach-to-classes", "scope-to-section", "page-stylesheet"] as const).forEach((mode) => {
+      const result = createBricksExport({
+        html: placementHtml,
+        css: placementCss,
+        js: "",
+        options: { ...compatibilityOptions, cssPlacement: mode } as OutputOptions,
+      });
+      expect(result.validation.cssDeclarationCoverageValid, mode).toBe(true);
+      expect(result.validation.missingCssDeclarationCount, mode).toBe(0);
+    });
+  });
+
+  it("web Copy Bricks Structure embeds the routed page styles for the selected mode", () => {
+    const viaExport = createBricksExport({
+      html: placementHtml,
+      css: placementCss,
+      js: "",
+      options: { ...compatibilityOptions, cssPlacement: "auto-class-first" } as OutputOptions,
+    });
+    const viaWrapper = convertToBricksCompatibility({
+      html: placementHtml,
+      css: placementCss,
+      js: "",
+      cssPlacement: "auto-class-first",
+    });
+    // Both front-ends route through the same converter and agree on page styles.
+    expect(viaWrapper.pageStylesCss).toBe(viaExport.pageStylesCss ?? "");
+
+    // The web clipboard carries the routed CSS as one Jigma Page Styles element.
+    const clipboard = serializeBricksClipboardPayloadWithPageStyles(viaExport);
+    const pageStylesElement = clipboard.content.find((element) => element.label === "Jigma Page Styles");
+    expect(pageStylesElement).toBeDefined();
+    expect(`${pageStylesElement?.settings?.css ?? ""}`).toContain("@font-face");
+  });
+
+  it("honours the selected placement mode (different modes produce different routing)", () => {
+    const payloads = (["auto-class-first", "attach-to-classes", "scope-to-section", "page-stylesheet"] as const)
+      .map((mode) =>
+        convertToBricksCompatibility({ html: placementHtml, css: placementCss, js: "", cssPlacement: mode }).payloadJson
+      );
+    expect(new Set(payloads).size).toBe(payloads.length);
   });
 });

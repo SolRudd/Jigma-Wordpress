@@ -4,6 +4,7 @@ import type {
   BricksExport,
   BricksGlobalClass,
   ClassMode,
+  CssPlacementMode,
   ConversionInput,
   ConversionWarning,
   OutputOptions,
@@ -34,11 +35,16 @@ import { inspectDependencies } from "../dependencies/inspect.ts";
 import {
   attachCssToGlobalClasses,
   attachCssToElements,
+  attachCssToRootClass,
   auditCssDeclarationConservation,
   BRICKS_ELEMENT_CUSTOM_CSS_FIELD,
+  componentCssToGeneratedSelectors,
+  splitClassFirstCss,
   type ClassCssTarget,
+  type ElementCssResult,
   type ElementCssTarget,
 } from "../css/element.ts";
+import { DEFAULT_CSS_PLACEMENT, partitionPageLevelCss } from "../css/placement.ts";
 import { scopeCssToBem, type CssSelectorScopeMap } from "../css/scope.ts";
 import { BRICKS_COMPATIBILITY_SCHEMA_VERSION } from "./compatibility-schema.ts";
 
@@ -1370,11 +1376,123 @@ function createClassCssTargets(
   return targets;
 }
 
+function mergeCssResults(a: ElementCssResult, b: ElementCssResult): ElementCssResult {
+  const styledClassIds = new Set<string>([...a.styledClassIds, ...b.styledClassIds]);
+  const fallbackRuleCountByClassName = new Map<string, number>(a.fallbackRuleCountByClassName ?? []);
+  (b.fallbackRuleCountByClassName ?? new Map()).forEach((count, name) => {
+    fallbackRuleCountByClassName.set(name, (fallbackRuleCountByClassName.get(name) ?? 0) + count);
+  });
+
+  return {
+    warnings: [...a.warnings, ...b.warnings],
+    attachedRuleCount: a.attachedRuleCount + b.attachedRuleCount,
+    unmappedRuleCount: a.unmappedRuleCount + b.unmappedRuleCount,
+    pseudoSelectorCount: a.pseudoSelectorCount + b.pseudoSelectorCount,
+    nativeStyleMappedCount: a.nativeStyleMappedCount + b.nativeStyleMappedCount,
+    customCssFallbackCount: a.customCssFallbackCount + b.customCssFallbackCount,
+    blockScopedFallbackCount: a.blockScopedFallbackCount + b.blockScopedFallbackCount,
+    literalFallbackRuleCount: a.literalFallbackRuleCount + b.literalFallbackRuleCount,
+    responsiveRuleCount: a.responsiveRuleCount + b.responsiveRuleCount,
+    pseudoRuleCount: a.pseudoRuleCount + b.pseudoRuleCount,
+    unresolvedSelectorCount: a.unresolvedSelectorCount + b.unresolvedSelectorCount,
+    styledClassIds,
+    fallbackCss: "",
+    fallbackStrategy: a.fallbackStrategy === "literal-bem" || b.fallbackStrategy === "literal-bem"
+      ? "literal-bem"
+      : a.fallbackStrategy ?? b.fallbackStrategy ?? "none",
+    fallbackRuleCountByClassName,
+  };
+}
+
+// Expands comma-grouped selectors ("a, b { ... }" -> "a { ... } b { ... }") so the
+// declaration-conservation audit can match each individual selector. Brace-aware and
+// recurses into at-rule bodies (e.g. @media). Used only to build the audit's reference
+// output, never to build the actual Bricks payload.
+function expandCommaSelectors(css: string): string {
+  const out: string[] = [];
+  let index = 0;
+
+  while (index < css.length) {
+    const open = css.indexOf("{", index);
+    if (open === -1) {
+      break;
+    }
+
+    let depth = 0;
+    let close = -1;
+    for (let cursor = open; cursor < css.length; cursor += 1) {
+      if (css[cursor] === "{") {
+        depth += 1;
+      } else if (css[cursor] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          close = cursor;
+          break;
+        }
+      }
+    }
+    if (close === -1) {
+      break;
+    }
+
+    const selector = css.slice(index, open).trim();
+    const body = css.slice(open + 1, close);
+
+    if (/^@(?:media|container|supports|layer)\b/i.test(selector)) {
+      // Conditional group rules wrap nested rules: recurse to expand those.
+      out.push(`${selector} {\n${expandCommaSelectors(body)}\n}`);
+    } else if (/^@/.test(selector)) {
+      // Declaration at-rules (@property, @font-face, @keyframes, ...): keep verbatim.
+      out.push(`${selector} {${body}}`);
+    } else {
+      selector
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .forEach((part) => out.push(`${part} {${body}}`));
+    }
+
+    index = close + 1;
+  }
+
+  return out.join("\n");
+}
+
+// Routes component (non page/global) CSS to classes and/or the root component class
+// according to the selected placement mode. Page/global CSS is handled separately.
+function routeComponentCss(
+  mode: CssPlacementMode,
+  componentCss: string,
+  targets: ClassCssTarget[],
+  options: { minify?: boolean; literalOnly?: boolean },
+): ElementCssResult {
+  if (mode === "scope-to-section") {
+    return attachCssToRootClass(componentCss, targets, options);
+  }
+
+  if (mode === "auto-class-first") {
+    // Priority 1: clear single-class rules -> Bricks global classes.
+    // Priority 2: descendant/pseudo/media rules that cannot split safely -> root class.
+    const { classCss, rootCss } = splitClassFirstCss(componentCss, targets);
+    const distributed = attachCssToGlobalClasses(classCss, targets, options);
+    if (!rootCss.trim()) {
+      return distributed;
+    }
+    return mergeCssResults(distributed, attachCssToRootClass(rootCss, targets, options));
+  }
+
+  // attach-to-classes (and the unset legacy default): distribute across global classes.
+  return attachCssToGlobalClasses(componentCss, targets, options);
+}
+
 export function createBricksExport(input: ConversionInput): BricksExport {
   const warnings: ConversionWarning[] = [];
   const conversionProfile = input.options.conversionProfile ?? "clean-native";
   const exportProfile = input.options.exportProfile ?? "native-controls-experimental";
   const compatibilityProfile = exportProfile === "bricks-compatibility";
+  // CSS placement mode. Unset keeps the legacy class-distribution behaviour so existing
+  // low-level callers are unaffected; product entry points pass an explicit mode.
+  const cssPlacement: CssPlacementMode = input.options.cssPlacement ?? "attach-to-classes";
   const exportMode = input.options.exportMode;
   const shouldCreateNativeBemClasses = compatibilityProfile || isNativeBemClassMode(exportMode);
   const shouldAttachElementCss = !compatibilityProfile && exportMode === "element-styles";
@@ -1716,29 +1834,58 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     });
   }
 
-  const classCss = input.css.trim() && shouldCreateNativeBemClasses
-    ? attachCssToGlobalClasses(
-      input.css,
-      createClassCssTargets(pendingElements, globalClassIdMap, globalClassById),
+  // Split source CSS into page/global CSS (routed to the reusable Jigma Page Styles
+  // element) and component CSS (routed to classes/root per the selected placement mode).
+  // Partition runs only when a placement mode is explicitly chosen; unset low-level callers
+  // keep the original CSS untouched for back-compat. The page-stylesheet mode routes every
+  // rule to the Page Styles element.
+  const partition = partitionPageLevelCss(input.css);
+  const usePagePartition = input.options.cssPlacement !== undefined;
+  const pageStylesheetMode = cssPlacement === "page-stylesheet";
+  const componentCss = !usePagePartition
+    ? input.css
+    : pageStylesheetMode
+    ? ""
+    : partition.componentCss;
+  const cssTargets = shouldCreateNativeBemClasses
+    ? createClassCssTargets(pendingElements, globalClassIdMap, globalClassById)
+    : [];
+  // Page/global CSS routed to Jigma Page Styles. In page-stylesheet mode the entire
+  // stylesheet is routed there, with component selectors rewritten to the generated classes
+  // so the page-level CSS still targets the rendered elements.
+  const pageLevelCss = !usePagePartition
+    ? ""
+    : pageStylesheetMode
+    ? [
+      partition.pageLevelCss,
+      componentCssToGeneratedSelectors(partition.componentCss, cssTargets, input.options.minifyElementCss),
+    ].filter((part) => part && part.trim().length > 0).join("\n\n")
+    : partition.pageLevelCss;
+  const emptyClassCssResult: ElementCssResult = {
+    warnings: [],
+    attachedRuleCount: 0,
+    unmappedRuleCount: 0,
+    pseudoSelectorCount: 0,
+    nativeStyleMappedCount: 0,
+    customCssFallbackCount: 0,
+    blockScopedFallbackCount: 0,
+    literalFallbackRuleCount: 0,
+    responsiveRuleCount: 0,
+    pseudoRuleCount: 0,
+    unresolvedSelectorCount: 0,
+    styledClassIds: new Set<string>(),
+    fallbackCss: "",
+    fallbackStrategy: "none",
+    fallbackRuleCountByClassName: new Map<string, number>(),
+  };
+  const classCss = componentCss.trim() && shouldCreateNativeBemClasses
+    ? routeComponentCss(
+      cssPlacement,
+      componentCss,
+      cssTargets,
       { minify: input.options.minifyElementCss, literalOnly: compatibilityProfile },
     )
-    : {
-      warnings: [],
-      attachedRuleCount: 0,
-      unmappedRuleCount: 0,
-      pseudoSelectorCount: 0,
-      nativeStyleMappedCount: 0,
-      customCssFallbackCount: 0,
-      blockScopedFallbackCount: 0,
-      literalFallbackRuleCount: 0,
-      responsiveRuleCount: 0,
-      pseudoRuleCount: 0,
-      unresolvedSelectorCount: 0,
-      styledClassIds: new Set<string>(),
-      fallbackCss: "",
-      fallbackStrategy: "none" as const,
-      fallbackRuleCountByClassName: new Map<string, number>(),
-    };
+    : emptyClassCssResult;
   classCss.warnings
     .filter(isActionableCssWarning)
     .forEach((warning) => pushWarning(warnings, warning.message, warning.severity));
@@ -1796,8 +1943,21 @@ export function createBricksExport(input: ConversionInput): BricksExport {
       "error",
     );
   }
+  // Conservation runs against everything we actually emit: class-owned CSS, the page/global
+  // CSS routed to Jigma Page Styles, and (for the root/auto modes) the component CSS that is
+  // preserved verbatim on the root class. This keeps the "no CSS silently disappears" guarantee.
+  // Conservation runs against the source CSS we actually emit: class-owned CSS, plus (when a
+  // mode is active) the true-global CSS routed to Page Styles and the component CSS preserved
+  // verbatim-equivalent on the root/Page Styles (every mode except plain class distribution).
+  const conservationOutputCss = [
+    classCustomCss,
+    usePagePartition && partition.pageLevelCss.trim() ? expandCommaSelectors(partition.pageLevelCss) : "",
+    usePagePartition && cssPlacement !== "attach-to-classes" && partition.componentCss.trim()
+      ? expandCommaSelectors(partition.componentCss)
+      : "",
+  ].filter((part) => part && part.trim().length > 0).join("\n\n");
   const cssConservationAudit = input.css.trim() && shouldCreateNativeBemClasses
-    ? auditCssDeclarationConservation(input.css, classCustomCss)
+    ? auditCssDeclarationConservation(input.css, conservationOutputCss)
     : {
       sourceDeclarationCount: 0,
       preservedDeclarationCount: 0,
@@ -2018,6 +2178,7 @@ export function createBricksExport(input: ConversionInput): BricksExport {
     sourceUrl: "jigma.local",
     version: TARGET_BRICKS_VERSION,
     ...(shouldCreateGlobalClasses ? { globalClasses } : {}),
+    ...(pageLevelCss.trim() ? { pageStylesCss: pageLevelCss } : {}),
     jigmaMeta: {
       label: "Jigma strict BEM Bricks structure",
       targetBricksVersion: TARGET_BRICKS_VERSION,
@@ -2143,6 +2304,50 @@ export function serializeBricksClipboardPayload(exportResult: BricksExport) {
 
 export function serializeBricksClipboardPayloadJson(exportResult: BricksExport) {
   return JSON.stringify(serializeBricksClipboardPayload(exportResult));
+}
+
+// Builds the single reusable "Jigma Page Styles" element that carries page/global CSS.
+// Mirrors the WordPress plugin's PHP element shape so both front-ends stay consistent.
+export function buildJigmaPageStylesElement(
+  pageStylesCss: string,
+  usedIds: Set<string> = new Set(),
+): BricksElement {
+  let id = makeStableId("jigma-page-styles");
+  let salt = 0;
+  while (usedIds.has(id)) {
+    salt += 1;
+    id = makeStableId(`jigma-page-styles-${salt}`);
+  }
+
+  return {
+    id,
+    name: "code",
+    parent: 0,
+    children: [],
+    settings: {
+      executeCode: false,
+      css: pageStylesCss,
+      cssCode: pageStylesCss,
+    },
+    label: "Jigma Page Styles",
+  };
+}
+
+// Clipboard payload that includes the routed page/global CSS as one Jigma Page Styles
+// element so a paste applies it without manual steps. Used by the standalone web app;
+// the WordPress plugin adds the same element server-side from pageStylesCss instead.
+export function serializeBricksClipboardPayloadWithPageStyles(exportResult: BricksExport) {
+  const payload = serializeBricksClipboardPayload(exportResult);
+  const pageStylesCss = (exportResult.pageStylesCss ?? "").trim();
+  if (!pageStylesCss) {
+    return payload;
+  }
+
+  const usedIds = new Set(payload.content.map((element) => `${element.id}`));
+  return {
+    ...payload,
+    content: [...payload.content, buildJigmaPageStylesElement(pageStylesCss, usedIds)],
+  };
 }
 
 export function getBricksExportBlockingMessages(exportResult: BricksExport) {

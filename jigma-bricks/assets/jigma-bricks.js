@@ -67,9 +67,12 @@
     rememberEditorWidths: true,
     showDiagnostics: false,
     includeJavaScript: true,
-    pageCssMode: "ask",
+    cssPlacement: "auto-class-first",
+    pageCssMode: "include",
     classConflictMode: "ask",
   };
+
+  var CSS_PLACEMENT_MODES = ["auto-class-first", "attach-to-classes", "scope-to-section", "page-stylesheet"];
 
   function el(tagName, className, text) {
     var node = document.createElement(tagName);
@@ -201,7 +204,8 @@
       rememberEditorWidths: typeof value.rememberEditorWidths === "boolean" ? value.rememberEditorWidths : defaultUi.rememberEditorWidths,
       showDiagnostics: Boolean(value.showDiagnostics),
       includeJavaScript: value.includeJavaScript !== false,
-      pageCssMode: ["ask", "include", "exclude"].indexOf(value.pageCssMode) === -1 ? "ask" : value.pageCssMode,
+      cssPlacement: CSS_PLACEMENT_MODES.indexOf(value.cssPlacement) === -1 ? defaultUi.cssPlacement : value.cssPlacement,
+      pageCssMode: ["ask", "include", "exclude"].indexOf(value.pageCssMode) === -1 ? defaultUi.pageCssMode : value.pageCssMode,
       classConflictMode: ["ask", "reuse", "cancel"].indexOf(value.classConflictMode) === -1 ? "ask" : value.classConflictMode,
     };
   }
@@ -928,6 +932,7 @@
       projectPrefix: "jg",
       blockName: "section",
       includeJavaScriptCode: Boolean(state.js.trim()) && ui.includeJavaScript,
+      cssPlacement: ui.cssPlacement,
     });
 
     state.lastRun = result;
@@ -1408,7 +1413,11 @@
     if (ui.confirmBeforeInsert && !window.confirm("Insert Jigma content into " + state.target.shortLabel + "?")) {
       return;
     }
-    var pageStylesCss = state.pageStylesDecision === "include" ? state.lastRun.pageLevelCss.css : "";
+    // Page/global CSS is routed automatically by the shared converter; the user never
+    // re-pastes it. Exclude only when the user explicitly chose to exclude page CSS.
+    var pageStylesCss = state.pageStylesDecision === "exclude"
+      ? ""
+      : (state.lastRun.pageStylesCss || state.lastRun.pageLevelCss.css || "");
     nodes.insert.disabled = true;
     JigmaBricksInsertAdapter.insert(state.lastRun.payload, {
       includeJsCode: Boolean(state.js.trim()) && ui.includeJavaScript,
@@ -1452,7 +1461,11 @@
     if (ui.confirmBeforeInsert && !window.confirm("Update " + (component.name || "Jigma component") + " in Bricks?")) {
       return;
     }
-    var pageStylesCss = state.pageStylesDecision === "include" ? state.lastRun.pageLevelCss.css : "";
+    // Page/global CSS is routed automatically by the shared converter; the user never
+    // re-pastes it. Exclude only when the user explicitly chose to exclude page CSS.
+    var pageStylesCss = state.pageStylesDecision === "exclude"
+      ? ""
+      : (state.lastRun.pageStylesCss || state.lastRun.pageLevelCss.css || "");
     nodes.insert.disabled = true;
     JigmaBricksInsertAdapter.update(state.loadedComponentId, state.lastRun.payload, {
       includeJsCode: Boolean(state.js.trim()) && ui.includeJavaScript,
@@ -1659,6 +1672,12 @@
     var includeJs = toggleRow("Include JavaScript", "Creates one disabled Code element when JavaScript exists.", "includeJavaScript");
     includeJs.querySelector("input").disabled = !state.js.trim();
     section.appendChild(includeJs);
+    section.appendChild(selectRow("CSS placement", "cssPlacement", [
+      ["auto-class-first", "Auto — class-first"],
+      ["attach-to-classes", "Attach to classes"],
+      ["scope-to-section", "Scope to section"],
+      ["page-stylesheet", "Page stylesheet"],
+    ]));
     section.appendChild(selectRow("Include page-level CSS", "pageCssMode", [
       ["ask", "Ask each time"],
       ["include", "Always include"],
