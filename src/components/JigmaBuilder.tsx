@@ -54,10 +54,11 @@ import {
   createOutputExport,
   getOutputBlockingMessages,
   serializeOutputClipboardPayload,
-  serializeOutputClipboardJson,
   serializeOutputDebugReport,
   validateOutputClipboardPayload,
 } from "../../lib/output/adapters.ts";
+import { serializeBricksClipboardPayloadWithPageStyles } from "../../lib/bricks/export.ts";
+import { CSS_PLACEMENT_LABELS } from "../../lib/css/placement.ts";
 import { createPreviewDocument } from "../../lib/preview/document.ts";
 import type {
   ClassMode,
@@ -81,6 +82,7 @@ const defaultOptions: OutputOptions = {
   includeExternalScripts: false,
   minifyElementCss: false,
   includeJavaScriptCode: true,
+  cssPlacement: "auto-class-first",
 };
 
 export const SOURCE_EDITOR_DEFINITIONS: {
@@ -846,7 +848,7 @@ export default function JigmaBuilder() {
     [preview.html, preview.css, preview.js, options, excludedLayerIds, deletedLayerIds],
   );
   const bricksClipboardJson = useMemo(
-    () => serializeOutputClipboardJson(bricksExport),
+    () => JSON.stringify(serializeBricksClipboardPayloadWithPageStyles(bricksExport)),
     [bricksExport],
   );
   const bricksDebugJson = useMemo(
@@ -1334,7 +1336,9 @@ export default function JigmaBuilder() {
         setMessages(blockingMessages.map((message) => ({ kind: "export", message })));
         return;
       }
-      const json = serializeOutputClipboardJson(latestExport, outputAdapter);
+      // Include the routed page/global CSS as a Jigma Page Styles element so a paste
+      // applies it without the user re-pasting CSS.
+      const json = JSON.stringify(serializeBricksClipboardPayloadWithPageStyles(latestExport));
       const parsed = JSON.parse(json);
       const schema = validateOutputClipboardPayload(parsed, outputAdapter);
       if (!json.trim().startsWith("{") || !schema.valid) {
@@ -2165,6 +2169,25 @@ export default function JigmaBuilder() {
             {!hasPreviewHtml && (
               <p className="empty-state">Add some HTML before exporting.</p>
             )}
+
+            <div className="export-css-placement">
+              <label htmlFor="jigma-css-placement">CSS placement</label>
+              <select
+                id="jigma-css-placement"
+                value={options.cssPlacement ?? "auto-class-first"}
+                onChange={(event) =>
+                  setOption("cssPlacement", event.currentTarget.value as OutputOptions["cssPlacement"])}
+              >
+                <option value="auto-class-first">{CSS_PLACEMENT_LABELS["auto-class-first"]}</option>
+                <option value="attach-to-classes">{CSS_PLACEMENT_LABELS["attach-to-classes"]}</option>
+                <option value="scope-to-section">{CSS_PLACEMENT_LABELS["scope-to-section"]}</option>
+                <option value="page-stylesheet">{CSS_PLACEMENT_LABELS["page-stylesheet"]}</option>
+              </select>
+              <p className="export-css-placement__note">
+                Page/global CSS (:root, @font-face, resets, …) is always routed to one
+                reusable Jigma Page Styles element.
+              </p>
+            </div>
 
             <div className="export-js-control">
               <Toggle

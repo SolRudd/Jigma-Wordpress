@@ -6,19 +6,28 @@ import {
   serializeBricksClipboardPayloadJson,
   TARGET_BRICKS_VERSION,
 } from "../bricks/export.ts";
-import type { ConversionWarning, OutputOptions } from "../../types/jigma.ts";
+import {
+  CSS_PLACEMENT_LABELS,
+  DEFAULT_CSS_PLACEMENT,
+  normalizeCssPlacement,
+  partitionPageLevelCss,
+} from "../css/placement.ts";
+import type {
+  ConversionWarning,
+  CssPlacementMode,
+  OutputOptions,
+} from "../../types/jigma.ts";
+import type { PageLevelCssGroup, PageLevelCssReview } from "../css/placement.ts";
 
-export interface PageLevelCssGroup {
-  type: "root" | "document" | "font-face" | "property" | "keyframes" | "layer" | "import" | "reset" | "global";
-  label: string;
-  count: number;
-}
-
-export interface PageLevelCssReview {
-  css: string;
-  ruleCount: number;
-  groups: PageLevelCssGroup[];
-}
+// Re-export the shared CSS routing surface so plugin consumers have a single import point.
+export {
+  CSS_PLACEMENT_LABELS,
+  DEFAULT_CSS_PLACEMENT,
+  detectPageLevelCss,
+  normalizeCssPlacement,
+} from "../css/placement.ts";
+export type { PageLevelCssGroup, PageLevelCssReview } from "../css/placement.ts";
+export type { CssPlacementMode } from "../../types/jigma.ts";
 
 export interface JigmaPluginCoreInput {
   html: string;
@@ -27,6 +36,7 @@ export interface JigmaPluginCoreInput {
   projectPrefix?: string;
   blockName?: string;
   includeJavaScriptCode?: boolean;
+  cssPlacement?: CssPlacementMode;
 }
 
 export interface JigmaPluginCoreResult {
@@ -47,10 +57,18 @@ export interface JigmaPluginCoreResult {
     missingHrefCount: number;
     missingImageCount: number;
   };
+  cssPlacement: CssPlacementMode;
+  cssPlacementLabel: string;
+  // Page/global CSS routed to the reusable Jigma Page Styles element. Inserted
+  // automatically; the user never needs to re-paste it.
+  pageStylesCss: string;
   pageLevelCss: PageLevelCssReview;
 }
 
-const pluginCompatibilityOptions = (input: JigmaPluginCoreInput): OutputOptions => ({
+const pluginCompatibilityOptions = (
+  input: JigmaPluginCoreInput,
+  cssPlacement: CssPlacementMode,
+): OutputOptions => ({
   stylingMode: "bem-css",
   exportMode: "native-bem-classes",
   exportProfile: "bricks-compatibility",
@@ -62,144 +80,19 @@ const pluginCompatibilityOptions = (input: JigmaPluginCoreInput): OutputOptions 
   includeExternalScripts: false,
   minifyElementCss: false,
   includeJavaScriptCode: Boolean(input.includeJavaScriptCode),
+  cssPlacement,
 });
 
-function readTopLevelCssBlocks(css: string) {
-  const blocks: string[] = [];
-  let index = 0;
-
-  while (index < css.length) {
-    while (index < css.length && /\s/.test(css[index])) index += 1;
-    if (index >= css.length) break;
-
-    const start = index;
-    let quote = "";
-    let depth = 0;
-
-    while (index < css.length) {
-      const char = css[index];
-      const previous = css[index - 1];
-
-      if (quote) {
-        if (char === quote && previous !== "\\") quote = "";
-        index += 1;
-        continue;
-      }
-
-      if (char === "\"" || char === "'") {
-        quote = char;
-        index += 1;
-        continue;
-      }
-
-      if (char === "{") {
-        depth += 1;
-      } else if (char === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          index += 1;
-          blocks.push(css.slice(start, index).trim());
-          break;
-        }
-      } else if (char === ";" && depth === 0) {
-        index += 1;
-        blocks.push(css.slice(start, index).trim());
-        break;
-      }
-
-      index += 1;
-    }
-
-    if (index >= css.length && start < css.length) {
-      const rest = css.slice(start).trim();
-      if (rest) blocks.push(rest);
-    }
-  }
-
-  return blocks.filter(Boolean);
-}
-
-function selectorList(header: string) {
-  return header
-    .split(",")
-    .map((selector) => selector.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function classifyPageLevelCss(block: string): PageLevelCssGroup["type"] | null {
-  const header = block.split("{")[0].trim();
-  const lower = header.toLowerCase();
-
-  if (lower.startsWith("@import")) return "import";
-  if (lower.startsWith("@font-face")) return "font-face";
-  if (lower.startsWith("@property")) return "property";
-  if (lower.startsWith("@keyframes") || lower.startsWith("@-webkit-keyframes")) return "keyframes";
-  if (lower.startsWith("@layer") && !lower.includes(".")) return "layer";
-
-  const selectors = selectorList(header);
-  if (selectors.length === 0) return null;
-  if (selectors.every((selector) => selector === ":root")) return "root";
-  if (selectors.every((selector) => selector === "html" || selector === "body" || selector === "html body")) {
-    return "document";
-  }
-  if (selectors.some((selector) => selector === "*" || selector.startsWith("*::") || selector.includes("*, *"))) {
-    return "reset";
-  }
-  if (selectors.some((selector) => selector.startsWith("html ") || selector.startsWith("body "))) {
-    return "global";
-  }
-
-  return null;
-}
-
-const pageLevelLabels: Record<PageLevelCssGroup["type"], string> = {
-  root: ":root variables",
-  document: "document styles",
-  "font-face": "@font-face",
-  property: "@property",
-  keyframes: "shared @keyframes",
-  layer: "unscoped @layer",
-  import: "@import",
-  reset: "global reset",
-  global: "global selector",
-};
-
-export function detectPageLevelCss(css: string): PageLevelCssReview {
-  const seen = new Set<string>();
-  const blocks: string[] = [];
-  const groups = new Map<PageLevelCssGroup["type"], number>();
-
-  readTopLevelCssBlocks(css).forEach((block) => {
-    const type = classifyPageLevelCss(block);
-    const normalized = block.replace(/\s+/g, " ").trim();
-    if (!type || seen.has(normalized)) {
-      return;
-    }
-
-    seen.add(normalized);
-    blocks.push(block);
-    groups.set(type, (groups.get(type) || 0) + 1);
-  });
-
-  return {
-    css: blocks.join("\n\n"),
-    ruleCount: blocks.length,
-    groups: Array.from(groups.entries()).map(([type, count]) => ({
-      type,
-      label: pageLevelLabels[type],
-      count,
-    })),
-  };
-}
-
 export function convertToBricksCompatibility(input: JigmaPluginCoreInput): JigmaPluginCoreResult {
+  const cssPlacement = normalizeCssPlacement(input.cssPlacement, DEFAULT_CSS_PLACEMENT);
   const exportResult = createBricksExport({
     html: input.html,
     css: input.css,
     js: input.js,
-    options: pluginCompatibilityOptions(input),
+    options: pluginCompatibilityOptions(input, cssPlacement),
   });
   const blockingErrors = getBricksExportBlockingMessages(exportResult);
+  const partition = partitionPageLevelCss(input.css);
 
   return {
     schemaVersion: BRICKS_COMPATIBILITY_SCHEMA_VERSION,
@@ -219,6 +112,10 @@ export function convertToBricksCompatibility(input: JigmaPluginCoreInput): Jigma
       missingHrefCount: exportResult.validation.missingHrefCount ?? 0,
       missingImageCount: exportResult.validation.missingImageCount ?? 0,
     },
-    pageLevelCss: detectPageLevelCss(input.css),
+    cssPlacement,
+    cssPlacementLabel: CSS_PLACEMENT_LABELS[cssPlacement],
+    // Reflects what was actually routed to the Page Styles element for this mode.
+    pageStylesCss: exportResult.pageStylesCss ?? "",
+    pageLevelCss: partition.review,
   };
 }

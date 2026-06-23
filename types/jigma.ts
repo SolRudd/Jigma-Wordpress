@@ -10,6 +10,23 @@ export type ConversionProfile = "clean-native" | "fidelity";
 
 export type ExportProfile = "bricks-compatibility" | "native-controls-experimental";
 
+// Where converted CSS is placed in the Bricks output.
+// - auto-class-first (default): class-first routing. Clear single-class rules go to Bricks
+//   global class CSS; component-scoped rules that cannot be split safely (descendant, pseudo,
+//   media) stay on the root/component class; true globals go to Jigma Page Styles.
+// - attach-to-classes: distribute CSS across the generated Bricks global classes (preserves
+//   the existing class-owned behaviour, Jigma's core advantage).
+// - scope-to-section: preserve the full component CSS on the root component class (visual parity).
+// - page-stylesheet: route all CSS to the Jigma Page Styles element.
+// Page/global CSS (:root, html, body, @font-face, @keyframes, @property, resets, global
+// utilities, and unowned variables) is always routed to one reusable Jigma Page Styles
+// element regardless of mode.
+export type CssPlacementMode =
+  | "auto-class-first"
+  | "attach-to-classes"
+  | "scope-to-section"
+  | "page-stylesheet";
+
 export type ExportMode =
   | "native-bem-classes"
   | "element-styles"
@@ -30,6 +47,9 @@ export interface OutputOptions {
   includeExternalScripts: boolean;
   minifyElementCss: boolean;
   includeJavaScriptCode?: boolean;
+  // CSS placement mode. When unset, the low-level exporter preserves the legacy
+  // distributed-class behaviour; product entry points default to root-component.
+  cssPlacement?: CssPlacementMode;
 }
 
 export interface ParsedElement {
@@ -265,6 +285,9 @@ export interface BricksExport {
   sourceUrl: "jigma.local";
   version: string;
   globalClasses?: BricksGlobalClass[];
+  // Page/global CSS routed to the reusable Jigma Page Styles element (present only
+  // when the source contained page-level CSS such as :root, @font-face, or resets).
+  pageStylesCss?: string;
   jigmaMeta: {
     label: string;
     targetBricksVersion: string;

@@ -1124,7 +1124,11 @@ function collectConservationDeclarations(
       return;
     }
 
-    if (block.selector === ":root" || /^@font-face\b/i.test(block.selector)) {
+    if (
+      block.selector === ":root" ||
+      /^@(?:font-face|property|import|layer|page|charset)\b/i.test(block.selector)
+    ) {
+      // Page/global CSS routed to the reusable Jigma Page Styles element.
       declarations.forEach((declaration) => {
         records.push({
           selector: block.selector,
@@ -1911,4 +1915,256 @@ export function attachCssToGlobalClasses(
       : "none",
     fallbackRuleCountByClassName,
   };
+}
+
+function buildTargetMaps(targets: ClassCssTarget[]) {
+  const classMap = new Map<string, Set<ClassCssTarget>>();
+  const idMap = new Map<string, Set<ClassCssTarget>>();
+  targets.forEach((target) => {
+    unique([...target.sourceClasses, target.className]).forEach((className) =>
+      addClassMapEntry(classMap, className, target)
+    );
+    addClassMapEntry(idMap, target.sourceId, target);
+  });
+  return { classMap, idMap };
+}
+
+function pickRootTarget(targets: ClassCssTarget[]) {
+  return targets.find((target) => !target.className.includes("__")) ?? targets[0];
+}
+
+function emptyElementCssResult(warnings: ConversionWarning[]): ElementCssResult {
+  return {
+    warnings,
+    attachedRuleCount: 0,
+    unmappedRuleCount: 0,
+    pseudoSelectorCount: 0,
+    nativeStyleMappedCount: 0,
+    customCssFallbackCount: 0,
+    blockScopedFallbackCount: 0,
+    literalFallbackRuleCount: 0,
+    responsiveRuleCount: 0,
+    pseudoRuleCount: 0,
+    unresolvedSelectorCount: 0,
+    styledClassIds: new Set<string>(),
+    fallbackCss: "",
+    fallbackStrategy: "none",
+    fallbackRuleCountByClassName: new Map<string, number>(),
+  };
+}
+
+// Root/component placement (Mode A). Preserves the full component CSS on the root
+// component class for maximum visual parity: selectors are rewritten to the generated
+// Bricks class names where they map, and kept verbatim otherwise. Descendant selectors,
+// pseudo selectors and media queries stay in their original context (no splitting).
+export function attachCssToRootClass(
+  css: string,
+  targets: ClassCssTarget[],
+  options: ElementCssOptions = {},
+): ElementCssResult {
+  const warnings: ConversionWarning[] = [];
+  const result = emptyElementCssResult(warnings);
+  const rootTarget = targets.length > 0 ? pickRootTarget(targets) : null;
+  if (!css.trim() || !rootTarget) {
+    return result;
+  }
+
+  const { classMap, idMap } = buildTargetMaps(targets);
+  let attachedRuleCount = 0;
+  let responsiveRuleCount = 0;
+  let pseudoRuleCount = 0;
+
+  const rewriteBlocks = (inputCss: string): string[] => {
+    const out: string[] = [];
+    parseTopLevelBlocks(inputCss).forEach((block) => {
+      if (/^@(?:media|container|supports)\b/i.test(block.selector)) {
+        const inner = rewriteBlocks(block.body);
+        if (inner.length === 0) {
+          return;
+        }
+        responsiveRuleCount += 1;
+        out.push(
+          options.minify
+            ? `${block.selector}{${inner.join("")}}`
+            : `${block.selector} {\n${indent(inner.join("\n\n"), 2)}\n}`,
+        );
+        return;
+      }
+
+      if (/^@/.test(block.selector)) {
+        out.push(formatRawAtRule(block.selector, block.body));
+        attachedRuleCount += 1;
+        return;
+      }
+
+      const declarations = parseDeclarations(block.body);
+      if (declarations.length === 0) {
+        return;
+      }
+      const declText = declarations.map(formatDeclaration).join("\n");
+
+      const rewrittenSelector = block.selector
+        .split(",")
+        .map((raw) => {
+          const selector = raw.trim();
+          if (!selector) {
+            return "";
+          }
+          if (/:{1,2}[a-z-]/i.test(selector)) {
+            pseudoRuleCount += 1;
+          }
+          // Best-effort fidelity: keep the original selector when it cannot be mapped
+          // to a generated class so nothing is dropped.
+          return mapSelectorToLiteralBem(selector, classMap, idMap) ?? selector;
+        })
+        .filter(Boolean)
+        .join(", ");
+
+      if (!rewrittenSelector) {
+        return;
+      }
+      attachedRuleCount += 1;
+      out.push(
+        options.minify
+          ? `${rewrittenSelector}{${minifyDeclarations(declText)}}`
+          : `${rewrittenSelector} {\n${indent(declText, 2)}\n}`,
+      );
+    });
+    return out;
+  };
+
+  const snippets = rewriteBlocks(css);
+  if (snippets.length > 0) {
+    const existing = typeof rootTarget.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] === "string"
+      ? `${rootTarget.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD]}`.trim()
+      : "";
+    const cssValue = snippets.join("\n\n");
+    rootTarget.globalClass.settings[BRICKS_ELEMENT_CUSTOM_CSS_FIELD] = existing
+      ? `${existing}\n\n${cssValue}`
+      : cssValue;
+    result.styledClassIds.add(rootTarget.globalClass.id);
+  }
+
+  result.attachedRuleCount = attachedRuleCount;
+  result.customCssFallbackCount = attachedRuleCount;
+  result.literalFallbackRuleCount = attachedRuleCount;
+  result.responsiveRuleCount = responsiveRuleCount;
+  result.pseudoRuleCount = pseudoRuleCount;
+  result.fallbackStrategy = "literal-bem";
+  return result;
+}
+
+// Class-first split for the auto mode. A block goes to the class stream only when every
+// comma selector is a single, simple class selector that maps to a generated class
+// (priority 1). Anything that cannot be split without changing cascade/descendant
+// behaviour - descendant combinators, pseudo selectors, media queries, at-rules, ids,
+// or unmapped classes - goes to the root/component stream (priority 2).
+export function splitClassFirstCss(
+  css: string,
+  targets: ClassCssTarget[],
+): { classCss: string; rootCss: string } {
+  if (!css.trim() || targets.length === 0) {
+    return { classCss: "", rootCss: css.trim() };
+  }
+
+  const { classMap } = buildTargetMaps(targets);
+  const classBlocks: string[] = [];
+  const rootBlocks: string[] = [];
+
+  const isSimpleMappedClass = (selector: string) => {
+    const trimmed = selector.trim();
+    if (!/^\.[-_a-zA-Z][-_a-zA-Z0-9-]*$/.test(trimmed)) {
+      return false;
+    }
+    return Boolean(getPreferredClassTarget(trimmed.slice(1), classMap));
+  };
+
+  const blockIsClassFirst = (block: CssBlock): boolean => {
+    if (/^@/.test(block.selector)) {
+      return false;
+    }
+    return block.selector
+      .split(",")
+      .map((selector) => selector.trim())
+      .filter(Boolean)
+      .every(isSimpleMappedClass);
+  };
+
+  parseTopLevelBlocks(css).forEach((block) => {
+    const text = `${block.selector} {\n${block.body}\n}`;
+    if (blockIsClassFirst(block)) {
+      classBlocks.push(text);
+    } else {
+      rootBlocks.push(text);
+    }
+  });
+
+  return {
+    classCss: classBlocks.join("\n\n"),
+    rootCss: rootBlocks.join("\n\n"),
+  };
+}
+
+// Rewrites component CSS selectors to the generated Bricks class names (keeping unmapped
+// selectors verbatim) and returns it as a CSS string. Used by the page-stylesheet mode so
+// the routed CSS still targets the rendered generated classes.
+function rewriteComponentCss(
+  inputCss: string,
+  classMap: Map<string, Set<ClassCssTarget>>,
+  idMap: Map<string, Set<ClassCssTarget>>,
+  minify = false,
+): string {
+  const out: string[] = [];
+  parseTopLevelBlocks(inputCss).forEach((block) => {
+    if (/^@(?:media|container|supports)\b/i.test(block.selector)) {
+      const inner = rewriteComponentCss(block.body, classMap, idMap, minify);
+      if (!inner.trim()) {
+        return;
+      }
+      out.push(minify ? `${block.selector}{${inner}}` : `${block.selector} {\n${indent(inner, 2)}\n}`);
+      return;
+    }
+    if (/^@/.test(block.selector)) {
+      out.push(formatRawAtRule(block.selector, block.body));
+      return;
+    }
+
+    const declarations = parseDeclarations(block.body);
+    if (declarations.length === 0) {
+      return;
+    }
+    const declText = declarations.map(formatDeclaration).join("\n");
+    const rewrittenSelector = block.selector
+      .split(",")
+      .map((raw) => {
+        const selector = raw.trim();
+        if (!selector) {
+          return "";
+        }
+        return mapSelectorToLiteralBem(selector, classMap, idMap) ?? selector;
+      })
+      .filter(Boolean)
+      .join(", ");
+    if (!rewrittenSelector) {
+      return;
+    }
+    out.push(
+      minify
+        ? `${rewrittenSelector}{${minifyDeclarations(declText)}}`
+        : `${rewrittenSelector} {\n${indent(declText, 2)}\n}`,
+    );
+  });
+  return out.join("\n\n");
+}
+
+export function componentCssToGeneratedSelectors(
+  css: string,
+  targets: ClassCssTarget[],
+  minify = false,
+): string {
+  if (!css.trim() || targets.length === 0) {
+    return css.trim();
+  }
+  const { classMap, idMap } = buildTargetMaps(targets);
+  return rewriteComponentCss(css, classMap, idMap, minify);
 }
